@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Neosky Live Twin</title>
+<link rel="icon" href="/static/neosky-emblem.png">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v={{VERSION}}">
+<style>
+    body { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+    .box { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
+    .box img { height: 26px; }
+    .box h1 { font-size: 22px; margin: 18px 0 4px; }
+    .box p { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+    label { display: block; font-size: 14px; color: var(--muted); margin: 12px 0 4px; }
+    input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+    .btn { width: 100%; margin-top: 18px; padding: 10px; }
+    .err { color: var(--warning); font-size: 14px; margin-top: 10px; }
+    .ver { color: var(--faint); font-size: 12.5px; margin-top: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<form class="box" method="post" action="/login">
+    <img src="/static/neosky-logo-on-dark.png" alt="Neosky">
+    <h1>Live Twin</h1>
+    <p>Every drone in the air, live: position, camera, health.</p>
+    <label for="u">User name</label><input id="u" name="username" autocomplete="username" required autofocus>
+    <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
+    <button class="btn primary" type="submit">Sign in</button>
+    <div class="err" id="err" hidden>That user name and password don't match.</div>
+    <div class="ver">v{{VERSION}}</div>
+</form>
+<script>if (location.search.includes('error')) document.getElementById('err').hidden = false;</script>
+</body>
+</html>

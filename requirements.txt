@@ -1,0 +1,8 @@
+fastapi==0.159.1
+uvicorn[standard]==0.54.0
+pymavlink==2.4.50
+websockets==17.3
+httpx==0.28.1
+itsdangerous==2.2.0
+python-multipart==0.0.32
+tzdata; sys_platform == "win32"
