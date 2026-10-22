@@ -575,7 +575,7 @@ function onSnapshot(list) {
         fitFleet();
         if (S.sel && S.drones[S.sel]) select(S.sel);
         else {
-            const flying = list.find((d) => d.status === 'flying') || list.find((d) => d.status !== 'offline');
+            const flying = list.find((d) => d.status === 'flying') || list.find((d) => d.status !== 'offline') || list[0];
             if (flying) select(flying.key);
         }
         fillDroneSelects();
