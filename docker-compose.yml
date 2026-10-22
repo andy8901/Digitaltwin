@@ -1,0 +1,43 @@
+# Neosky Live Twin: web app + video server (MediaMTX) + HTTPS (Caddy).
+#   cp .env.example .env   # edit every secret, TWIN_DOMAIN and PUBLIC_HOST
+#   docker compose up -d --build
+# Open ports: 80/443 (web + relays), 8554/tcp (relays publish video), 8189/udp+tcp (WebRTC video to browsers).
+services:
+  twin:
+    build: .
+    env_file: .env
+    environment:
+      TWIN_MEDIAMTX_WEBRTC: http://mediamtx:8889
+      TWIN_MEDIAMTX_HLS: http://mediamtx:8888
+    volumes:
+      - twin-data:/app/data
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    volumes:
+      - ./deploy/mediamtx.yml:/mediamtx.yml:ro
+      - recordings:/recordings
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${PUBLIC_HOST:-}
+    ports:
+      - "8554:8554"
+      - "8189:8189/udp"
+      - "8189:8189/tcp"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    restart: unless-stopped
+
+volumes:
+  twin-data:
+  recordings:
+  caddy-data:

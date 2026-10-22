@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neosky Live Twin</title>
+<link rel="icon" href="/static/neosky-emblem.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/vendor/leaflet.css">
+<link rel="stylesheet" href="/static/style.css?v={{VERSION}}">
+</head>
+<body>
+<header class="top">
+    <div class="brand"><img src="/static/neosky-logo-on-dark.png" alt="Neosky"><span>Live Twin</span></div>
+    <div class="fleetcount" id="fleetcount"></div>
+    <div class="spacer"></div>
+    <button class="tbtn" id="btnStats" type="button">Fleet statistics</button>
+    <button class="tbtn" id="btnHistory" type="button">Flight history</button>
+    <span class="clock" id="clock"></span>
+    <span class="conn" id="conn" title="Live connection"></span>
+    <span class="user" id="user"></span>
+</header>
+
+<div class="main">
+    <nav class="rail" aria-label="Drones">
+        <h2>Drones</h2>
+        <div id="droneList"><div class="empty">Waiting for the first drone. Start the field relay on a ground station and it appears here.</div></div>
+    </nav>
+
+    <section class="mapwrap" aria-label="Map">
+        <div id="map"></div>
+        <div class="mapctl">
+            <button type="button" id="btnFollow" class="on" title="Keep the selected drone in view">Follow</button>
+            <button type="button" id="btnFleet" title="Fit every drone on the map">All drones</button>
+            <button type="button" id="btnLayer" title="Switch between satellite and street map">Street map</button>
+        </div>
+        <div class="replaybar" id="replaybar" hidden></div>
+    </section>
+
+    <aside class="detail" id="detail" aria-live="off">
+        <div class="placeholder" id="noSel">Select a drone to see its camera, attitude, obstacle sensors and status.</div>
+        <div id="sel" hidden>
+            <div class="dhead">
+                <h1 id="dMsn"></h1><span class="model" id="dModel"></span>
+                <span class="pill" id="dStatus"></span><span class="mode" id="dMode"></span>
+                <span class="timer" id="dTimer" title="Time since arming"></span>
+            </div>
+
+            <div class="video" id="video">
+                <video id="vid" autoplay muted playsinline></video>
+                <div class="vmsg" id="vmsg">Connecting to the camera…</div>
+                <div class="vtag" id="vtag" hidden><span class="dot"></span>Live camera</div>
+                <div class="vctl"><button type="button" id="vRetry">Reconnect</button><button type="button" id="vMode" title="Switch to HLS if WebRTC is blocked on this network">HLS</button></div>
+            </div>
+
+            <div class="twinrow">
+                <div class="twin"><span class="ttl">Attitude twin</span><canvas id="twin"></canvas><div class="att" id="att"></div></div>
+                <div class="radar"><span class="ttl">ODS obstacles</span><canvas id="radar"></canvas><div class="cap" id="radarCap"></div></div>
+            </div>
+
+            <div class="readouts" id="readouts"></div>
+
+            <div class="charts">
+                <div class="chart"><div class="k"><span>Altitude, last 5 min</span><span id="cAltV"></span></div><canvas id="cAlt"></canvas></div>
+                <div class="chart"><div class="k"><span>Battery voltage</span><span id="cVoltV"></span></div><canvas id="cVolt"></canvas></div>
+                <div class="chart"><div class="k"><span>Satellites</span><span id="cSatV"></span></div><canvas id="cSat"></canvas></div>
+                <div class="chart"><div class="k"><span>Current</span><span id="cCurV"></span></div><canvas id="cCur"></canvas></div>
+            </div>
+
+            <div class="sect"><h3>This flight</h3><div class="events" id="events"></div><ul class="prearm" id="prearm"></ul></div>
+            <div class="sect"><h3>Messages from the autopilot</h3><div class="msgs" id="msgs"></div></div>
+            <div class="actions" id="actions"></div>
+        </div>
+    </aside>
+</div>
+
+<section class="drawer" id="statsDrawer" hidden aria-label="Fleet statistics">
+    <div class="dtop">
+        <h2>Fleet statistics</h2>
+        <select id="stDrone" aria-label="Drone"></select>
+        <select id="stPeriod" aria-label="Period"></select>
+        <div class="spacer"></div>
+        <button class="btn" type="button" data-close>Back to live view</button>
+    </div>
+    <p class="note" id="stNote"></p>
+    <div id="stBody"></div>
+</section>
+
+<section class="drawer" id="histDrawer" hidden aria-label="Flight history">
+    <div class="dtop">
+        <h2>Flight history</h2>
+        <select id="hiDrone" aria-label="Drone"></select>
+        <select id="hiPeriod" aria-label="Period"></select>
+        <div class="spacer"></div>
+        <button class="btn" type="button" data-close>Back to live view</button>
+    </div>
+    <p class="note">Every flight the twin saw, from arming to disarming. Show the path on the map, set the root cause, or download the telemetry log (.tlog) to open it in Mission Planner.</p>
+    <div class="tablewrap"><table class="flights"><thead><tr>
+        <th>Start</th><th>Drone</th><th>Duration</th><th>Distance</th><th>Range</th><th>Max alt</th><th>Voltage</th><th>Events</th><th>Root cause</th><th></th>
+    </tr></thead><tbody id="hiBody"></tbody></table></div>
+</section>
+
+<script src="/static/vendor/leaflet.js"></script>
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/hls.min.js"></script>
+<script src="/static/app.js?v={{VERSION}}"></script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+# Same as mediamtx.yml, for running MediaMTX on the same machine as the app without Docker.
+# MediaMTX (v1.9.x) for the Neosky Live Twin.
+# Field relays publish each drone's camera to rtsp://relay:<TWIN_VIDEO_PUBLISH_PASS>@<server>:8554/<MSN>.
+# The Live Twin app reads it back over WebRTC (WHEP, port 8889) or HLS (8888) and passes it to logged-in viewers,
+# so only 8554/tcp (publishing) and 8189/udp+tcp (WebRTC media) need to be reachable from outside.
+logLevel: info
+
+# Every publish/read is checked by the Live Twin app (publish password, internal read password).
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8080/internal/mtx-auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtsp: yes
+protocols: [tcp]
+rtspAddress: :8554
+rtmp: no
+srt: no
+
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+# Put the server's public IP or DNS name here (or set MTX_WEBRTCADDITIONALHOSTS) so viewers' browsers can reach it.
+webrtcAdditionalHosts: []
+
+pathDefaults:
+  # Keep a recording of every camera stream (set to yes to enable; files land in /recordings).
+  record: no
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 10m
+  recordDeleteAfter: 168h
+
+paths:
+  all_others:
