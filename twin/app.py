@@ -112,8 +112,7 @@ def healthz():
 @app.get("/api/config")
 def api_config(request: Request):
     user = need_user(request)
-    return {"user": user, "version": __version__, "log_analysis": bool(config.LOG_ANALYSIS_URL),
-            "log_analysis_url": config.LOG_ANALYSIS_URL or None, "periods": stats.PERIODS,
+    return {"user": user, "version": __version__, "periods": stats.PERIODS,
             "models": config.MODEL_MAP, "tz": config.TIMEZONE}
 
 
@@ -184,7 +183,6 @@ async def api_stats(request: Request, msn: str = None, period: str = "all"):
     need_user(request)
     flights = store.flights(msn=msn or None, since=stats.period_start(period))
     out = stats.aggregate(flights)
-    out["log_analysis"] = await stats.log_analysis_stats(msn or None)
     out["period"] = period
     out["msn"] = msn or None
     return out

@@ -4,7 +4,7 @@ Every packet that arrives (through a field relay or over UDP) goes to Hub.feed()
 its MSN (given by the relay) or by its MAVLink system id, and the drone updates its state, detects events
 (failsafes, GPS/EKF problems, thrust loss, crash, pre-arm failures) and records the flight from arming to
 disarming: summary figures, a 1 Hz track, all status messages, and a .tlog of the raw stream that can be
-uploaded to Log-Analysis afterwards.
+opened in Mission Planner afterwards.
 
 The twin is read-only: nothing is ever sent back to the aircraft.
 """

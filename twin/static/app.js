@@ -604,8 +604,6 @@ async function loadStats() {
     const r = await fetch(`/api/stats?msn=${encodeURIComponent(msn)}&period=${period}`);
     if (!r.ok) { $('stBody').innerHTML = '<p class="nothing">Could not load statistics.</p>'; return; }
     const s = await r.json();
-    const la = s.log_analysis;
-    const lat = la && la.ok ? (msn ? (la.drones[msn] || null) : la.total) : null;
     const dec = { min: 1, m: 0, V: 2, A: 1, s: 0 };
     let html = `<div class="group"><h3>Flight performance<small>averages over ${s.flights} recorded flight${s.flights === 1 ? '' : 's'}</small></h3><div class="tiles">`
         + s.averages.map((a) => tile(a.label, fmt(a.value, dec[a.unit] ?? 1), a.unit, `${a.n} flight${a.n === 1 ? '' : 's'} with data`)).join('') + '</div></div>';
@@ -613,26 +611,16 @@ async function loadStats() {
         + s.failsafes.map((a) => tile(a.label, fmt(a.value, dec[a.unit] ?? 1), a.unit, `${a.flights} flight${a.flights === 1 ? '' : 's'} with this failsafe`, a.flights ? 'warm' : '')).join('') + '</div></div>';
     html += '<div class="group"><h3>Issues<small>number of flights</small></h3><div class="tiles">'
         + s.counts.map((c) => tile(c.label, c.value, '', '', c.value ? (c.key === 'crash' || c.key === 'thrust_loss' || c.key === 'motor_issue' ? 'hot' : 'warm') : '')).join('') + '</div></div>';
-    if (lat) {
-        html += '<div class="group"><h3>Root cause<small>from analysed logs in Log-Analysis</small></h3><div class="tiles">'
-            + tile('System errors', lat.system_error, '', lat.suggested_system ? `+${lat.suggested_system} suggested, not yet confirmed` : 'confirmed conclusions')
-            + tile('Pilot errors', lat.pilot_error, '', lat.suggested_pilot ? `+${lat.suggested_pilot} suggested, not yet confirmed` : 'confirmed conclusions')
-            + tile('Yet to decide', lat.undetermined + lat.not_concluded, '', `${lat.not_concluded} not concluded yet`)
-            + tile('Crashes in analysed logs', lat.crashes, '', '', lat.crashes ? 'hot' : '') + '</div></div>';
-    } else {
-        const c = s.conclusions;
-        html += '<div class="group"><h3>Root cause<small>tagged in Flight history</small></h3><div class="tiles">'
-            + tile('System errors', c.system_error) + tile('Pilot errors', c.pilot_error) + tile('Yet to decide', c.undetermined + c.none, '', `${c.none} not tagged yet`) + '</div></div>';
-    }
+    const c = s.conclusions;
+    html += '<div class="group"><h3>Root cause<small>as tagged in Flight history</small></h3><div class="tiles">'
+        + tile('System errors', c.system_error) + tile('Pilot errors', c.pilot_error)
+        + tile('Yet to decide', c.undetermined + c.none, '', `${c.none} not tagged yet`) + '</div></div>';
     html += '<div class="group"><h3>Logs and flying time</h3><div class="tiles">'
-        + tile('Flights recorded live', s.flights, '', s.flying_now ? `${s.flying_now} in the air now` : '')
-        + tile('Hours flown', fmt(s.total_hours, 1), 'h') + tile('Distance flown', fmt(s.total_km, 1), 'km')
-        + (lat ? tile('Logs uploaded to Log-Analysis', lat.logs, '', `${lat.analysed} analysed`) : '') + '</div></div>';
+        + tile('Flights recorded', s.flights, '', s.flying_now ? `${s.flying_now} in the air now` : '')
+        + tile('Telemetry logs (.tlog)', s.tlogs, '', 'download them in Flight history')
+        + tile('Hours flown', fmt(s.total_hours, 1), 'h') + tile('Distance flown', fmt(s.total_km, 1), 'km') + '</div></div>';
     $('stBody').innerHTML = html;
-    $('stNote').textContent = la && la.ok
-        ? 'Flight figures come from every flight this twin recorded. Root-cause totals come from Log-Analysis, where each log is investigated and closed as a pilot or system error.'
-        : la && !la.ok ? `Flight figures come from flights this twin recorded. Log-Analysis could not be reached (${la.error}), so root causes are the ones tagged in Flight history.`
-            : 'Flight figures come from every flight this twin recorded. Set LOG_ANALYSIS_URL and LOG_ANALYSIS_API_KEY to bring in pilot and system error totals from Log-Analysis.';
+    $('stNote').textContent = 'Every figure comes from the flights this twin recorded, from arming to disarming. Set the root cause of each flight in Flight history.';
 }
 
 // ------------------------------------------------------------------ flight history

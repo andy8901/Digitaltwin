@@ -56,10 +56,6 @@ VIDEO_PUBLISH_PASS = _env("TWIN_VIDEO_PUBLISH_PASS", "change-me-too")
 # Internal password the app uses when it reads from MediaMTX on a viewer's behalf.
 VIDEO_READ_PASS = _env("TWIN_VIDEO_READ_PASS") or secrets.token_hex(16)
 
-# Optional link to the Log-Analysis app for pilot/system error totals and analysed-log counts.
-LOG_ANALYSIS_URL = (_env("LOG_ANALYSIS_URL", "") or "").rstrip("/")
-LOG_ANALYSIS_API_KEY = _env("LOG_ANALYSIS_API_KEY", "")
-
 TIMEZONE = _env("TWIN_TZ", "Asia/Kolkata")
 
 # Model names and photos shown for each MSN; "064:Tavas,101:Nimble".

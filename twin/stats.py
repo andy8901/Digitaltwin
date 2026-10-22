@@ -1,9 +1,6 @@
-"""Fleet statistics over recorded flights, optionally merged with pilot/system error totals from Log-Analysis."""
-import time
+"""Fleet statistics over the flights this twin recorded."""
 from collections import OrderedDict
 from datetime import datetime, timedelta
-
-import httpx
 
 from . import config
 
@@ -76,28 +73,5 @@ def aggregate(flights):
     out["conclusions"] = conc
     out["total_hours"] = round(sum((s.get("flight_time_min") or 0) for s in S) / 60, 2)
     out["total_km"] = round(sum((s.get("distance_m") or 0) for s in S) / 1000, 2)
+    out["tlogs"] = sum(1 for f in flights if f.get("tlog_path"))
     return out
-
-
-_la_cache = {}
-
-
-async def log_analysis_stats(msn=None):
-    """Pilot/system error totals and analysed-log counts from the Log-Analysis app (cached 60 s)."""
-    if not config.LOG_ANALYSIS_URL or not config.LOG_ANALYSIS_API_KEY:
-        return None
-    key = msn or "*"
-    hit = _la_cache.get(key)
-    if hit and time.time() - hit[0] < 60:
-        return hit[1]
-    try:
-        async with httpx.AsyncClient(timeout=5) as c:
-            r = await c.get(f"{config.LOG_ANALYSIS_URL}/api/v1/drone-stats", params={"msn": msn} if msn else None,
-                            headers={"X-API-Key": config.LOG_ANALYSIS_API_KEY})
-            r.raise_for_status()
-            data = r.json()
-            data["ok"] = True
-    except Exception as e:
-        data = {"ok": False, "error": str(e)[:200]}
-    _la_cache[key] = (time.time(), data)
-    return data

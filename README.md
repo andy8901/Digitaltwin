@@ -14,8 +14,8 @@ A live digital twin of every Neosky drone in the air, anywhere in the country. O
   - averages per flight: flight time, distance travelled, range achieved, altitude, max voltage, min voltage, current, cold-start time
   - failsafes: average flight time when the battery failsafe triggered (and the voltage then), and average distance from home when the GCS or RC failsafe triggered
   - number of flights with a crash, potential thrust loss, motor issue, GPS issue, EKF issue, pre-arm issue, high vibration, or each failsafe
-  - total system errors, pilot errors and flights yet to decide
-  - flights recorded, hours and km flown, and logs uploaded to and analysed in Log-Analysis
+  - total system errors, pilot errors and flights yet to decide (as set in Flight history)
+  - flights recorded, telemetry logs, hours and km flown
 - **Flight history:** every flight from arming to disarming. For each one you can:
   - replay its path on the map, with failsafes and the crash site marked
   - set the root cause (pilot error, system error or yet to decide)
@@ -77,15 +77,6 @@ mediamtx deploy/mediamtx-local.yml                         # video; MediaMTX v1.
 Without a GCS, the relay can read the telemetry radio directly: `--mavlink COM5:57600`.
 
 **Camera:** use the camera's RTSP address, for example `rtsp://192.168.144.25:8554/main.264` for SIYI cameras. Browsers play H.264 over WebRTC everywhere. If the camera sends H.265 or a very high bitrate, add `--transcode` (re-encodes to 720p H.264 at 1.5 Mbit/s) or set the camera to H.264.
-
-## Link to Log-Analysis
-
-In Log-Analysis's `.env` set `LIVE_TWIN_API_KEY=<random>`. In the Live Twin's `.env` set:
-
-- `LOG_ANALYSIS_URL=https://<log-analysis address>`
-- `LOG_ANALYSIS_API_KEY=<the same value>`
-
-With this set, Fleet statistics takes pilot errors, system errors, logs yet to decide, logs uploaded and crashes from the investigated logs (`GET /api/v1/drone-stats`). Without it, the root cause comes from what you tag in Flight history.
 
 ## Try it without a drone
 
