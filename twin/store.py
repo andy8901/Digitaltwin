@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT, drone_key TEXT, flight_id INTEGER, ts REAL, sev INTEGER, text TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_messages_flight ON messages(flight_id);
+CREATE TABLE IF NOT EXISTS plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL, name TEXT, customer TEXT, lat REAL, lon REAL,
+    verdict TEXT, best_dir TEXT, result TEXT
+);
 """
 
 CONCLUSIONS = ("pilot_error", "system_error", "undetermined")
@@ -117,3 +121,23 @@ class Store:
 
     def messages(self, fid):
         return [dict(r) for r in self._x("SELECT ts, sev, text FROM messages WHERE flight_id=? ORDER BY ts", (fid,))]
+
+    # demo-site plans
+    def save_plan(self, name, customer, lat, lon, result):
+        cur = self._x("INSERT INTO plans(created, name, customer, lat, lon, verdict, best_dir, result) VALUES(?,?,?,?,?,?,?,?)",
+                      (time.time(), name, customer, lat, lon, result["verdict"]["level"], result["best"]["dir"], json.dumps(result)))
+        return cur.lastrowid
+
+    def plans(self, limit=100):
+        return [dict(r) for r in self._x("SELECT id, created, name, customer, lat, lon, verdict, best_dir FROM plans ORDER BY created DESC LIMIT ?", (limit,))]
+
+    def plan(self, pid):
+        r = self._x("SELECT * FROM plans WHERE id=?", (pid,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["result"] = json.loads(d["result"])
+        return d
+
+    def delete_plan(self, pid):
+        self._x("DELETE FROM plans WHERE id=?", (pid,))
