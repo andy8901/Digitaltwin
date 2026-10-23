@@ -142,18 +142,32 @@ function renderList() {
     const el = $('droneList');
     if (!S.list.length) return;
     const sorted = [...S.list].sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || String(a.msn).localeCompare(String(b.msn)));
-    el.innerHTML = sorted.map((d) => {
+    // Keyed update: each drone keeps its own button, only its contents change, so clicks are never lost
+    // to a button being replaced mid-click (the list refreshes 4 times a second).
+    if (el.querySelector('.empty')) el.innerHTML = '';
+    const seen = new Set();
+    sorted.forEach((d, idx) => {
         const a = alertFor(d);
         const vals = d.status === 'offline' ? `<span>Last seen ${d.last_seen_s != null ? ago(d.last_seen_s) : 'earlier'}</span>`
             : `<span><b>${fmt(d.alt, 0)}</b> m</span><span><b>${fmt(d.batt_pct)}</b>%</span><span><b>${fmt(d.sats)}</b> sats</span><span><b>${fmt(d.range, 0)}</b> m out</span>`;
-        return `<button type="button" class="drone s-${d.status} ${d.key === S.sel ? 'sel' : ''}" data-key="${esc(d.key)}">
-            <span class="bar"></span>
+        const inner = `<span class="bar"></span>
             <span><span class="msn">${esc(d.msn)}</span><span class="model">${esc(d.model || '')}</span></span>
             <span class="state"><b>${STATUS[d.status]}</b>${esc(d.mode || '')}</span>
             <span class="vals">${vals}</span>
-            ${a ? `<span class="alert ${a[0]}">${esc(a[1])}</span>` : ''}
-        </button>`;
-    }).join('');
+            ${a ? `<span class="alert ${a[0]}">${esc(a[1])}</span>` : ''}`;
+        let b = el.querySelector(`.drone[data-key="${CSS.escape(d.key)}"]`);
+        if (!b) {
+            b = document.createElement('button');
+            b.type = 'button';
+            b.dataset.key = d.key;
+        }
+        const cls = `drone s-${d.status}${d.key === S.sel ? ' sel' : ''}`;
+        if (b.className !== cls) b.className = cls;
+        if (b._inner !== inner) { b.innerHTML = inner; b._inner = inner; }
+        if (el.children[idx] !== b) el.insertBefore(b, el.children[idx] || null);
+        seen.add(d.key);
+    });
+    [...el.querySelectorAll('.drone')].forEach((b) => { if (!seen.has(b.dataset.key)) b.remove(); });
     const c = { flying: 0, online: 0, link_lost: 0, offline: 0 };
     S.list.forEach((d) => { c[d.status === 'stale' ? 'online' : d.status] += 1; });
     $('fleetcount').innerHTML = `<span class="flying"><b>${c.flying}</b>flying</span><span><b>${c.online}</b>on the ground</span>`
