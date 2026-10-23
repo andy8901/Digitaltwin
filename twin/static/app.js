@@ -52,6 +52,16 @@ $('btnFleet').onclick = () => fitFleet();
 map.on('dragstart', () => { S.follow = false; $('btnFollow').classList.remove('on'); });
 
 const markers = {}, trails = {}, homes = {};
+// shared with planner.js
+window.TWIN = Object.assign(window.TWIN || {}, {
+    map, plannerOpen: false,
+    stopFollow() { S.follow = false; $('btnFollow').classList.remove('on'); },
+    showDrone() {
+        if (S.sel && S.drones[S.sel]) { $('noSel').hidden = true; $('sel').hidden = false; render(); } else { $('noSel').hidden = false; }
+    },
+    closeDrawers: () => closeDrawers(),
+    cfg: () => S.cfg,
+});
 function droneIcon(d, selected) {
     const c = COLORS[d.status] || COLORS.offline;
     const ring = selected ? '<circle cx="17" cy="17" r="15" fill="none" stroke="#54c8e8" stroke-width="2.5"/>' : '';
@@ -97,7 +107,7 @@ function updateMap(d) {
         if (sel && !map.hasLayer(homes[d.key])) homes[d.key].addTo(map);
         if (!sel && map.hasLayer(homes[d.key])) map.removeLayer(homes[d.key]);
     }
-    if (sel && S.follow && !S.replay) {
+    if (sel && S.follow && !S.replay && !window.TWIN.plannerOpen) {
         if (!map.getBounds().pad(-0.25).contains(ll)) map.panTo(ll, { animate: true });
     }
 }
@@ -169,6 +179,7 @@ function mmss(t) {
 // ------------------------------------------------------------------ selection & detail
 function select(key) {
     if (!S.drones[key]) return;
+    if (window.TWIN.plannerOpen) window.TWIN.closePlanner();
     const changed = S.sel !== key;
     S.sel = key;
     store.set('twin.sel', key);
@@ -583,7 +594,7 @@ function onSnapshot(list) {
     render();
 }
 function render() {
-    if (!S.sel || !S.drones[S.sel]) return;
+    if (!S.sel || !S.drones[S.sel] || window.TWIN.plannerOpen) return;
     renderDetail();
     twin.update(S.drones[S.sel]);
 }

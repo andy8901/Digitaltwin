@@ -1,0 +1,32 @@
+{
+  "tavas": {
+    "name": "TAVAS",
+    "source": "Neosky TAVAS UAS specification sheet",
+    "weight_kg": 2.5,
+    "category": "Small (2-25 kg) under the Drone Rules 2021: needs a UIN and a Remote Pilot Certificate",
+    "endurance_min": 35,
+    "video_range_m": 1500,
+    "cruise_ms": 10,
+    "max_agl_m": 120,
+    "max_launch_amsl_m": 2500,
+    "wind_max_ms": 12,
+    "temp_min_c": -10,
+    "temp_max_c": 50,
+    "ingress": "IP54 (dust and drizzle)",
+    "recovery_space_m": 3,
+    "ods": "6-sided obstacle detection",
+    "deployment_min": 5,
+    "failsafes": [
+      "Return to home on communication failure",
+      "Return to home on radio failsafe",
+      "Return to home / land on low battery",
+      "Return to home on battery imbalance"
+    ],
+    "climb_ms": 3,
+    "descent_ms": 1.5,
+    "assumed": [
+      "climb_ms",
+      "descent_ms"
+    ]
+  }
+}
