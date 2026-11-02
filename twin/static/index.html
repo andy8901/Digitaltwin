@@ -16,6 +16,7 @@
     <div class="brand"><img src="/static/neosky-logo-on-dark.png" alt="Neosky"><span>Live Twin</span></div>
     <div class="fleetcount" id="fleetcount"></div>
     <div class="spacer"></div>
+    <button class="tbtn" id="btnPlanner" type="button">Demo planner</button>
     <button class="tbtn" id="btnStats" type="button">Fleet statistics</button>
     <button class="tbtn" id="btnHistory" type="button">Flight history</button>
     <span class="clock" id="clock"></span>
@@ -41,6 +42,7 @@
 
     <aside class="detail" id="detail" aria-live="off">
         <div class="placeholder" id="noSel">Select a drone to see its camera, attitude, obstacle sensors and status.</div>
+        <div id="plannerPanel" hidden></div>
         <div id="sel" hidden>
             <div class="dhead">
                 <h1 id="dMsn"></h1><span class="model" id="dModel"></span>
@@ -106,5 +108,6 @@
 <script src="/static/vendor/three.min.js"></script>
 <script src="/static/vendor/hls.min.js"></script>
 <script src="/static/app.js?v={{VERSION}}"></script>
+<script src="/static/planner.js?v={{VERSION}}"></script>
 </body>
 </html>

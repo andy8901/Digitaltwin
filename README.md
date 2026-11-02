@@ -23,6 +23,63 @@ A live digital twin of every Neosky drone in the air, anywhere in the country. O
 
 The twin only listens. It never sends anything to an aircraft.
 
+## Demo planner
+
+The **Demo planner** button checks a customer's demo site before you travel. Paste the coordinates the customer sent: decimal (`12.9716, 77.5946`), degrees-minutes-seconds, or a Google Maps link. You can also click the map. Then choose the demo date and time and the flight height.
+
+| What it shows | How |
+|---|---|
+| **DGCA zone** at the take-off point (red / yellow / green) and the height that stays green | Estimated from the Drone Airspace Map rules (Drone Rules 2021) and public data; see the table below |
+| **Best direction to fly** | 16 directions around the take-off point are scored on the factors listed after this table |
+| **Demo route** inside the best direction | Climb-out, out to the demo point (10 s hold), a short camera sweep, return. Shows distance, flight time and battery use, and downloads as a Mission Planner `.waypoints` or QGroundControl `.plan` file |
+| **Drone limits on the day** | Launch altitude, height, wind at 10/120 m and gusts, temperature, rain, visibility and daylight, checked against the drone's spec sheet (`twin/data/drone_profiles.json`, TAVAS from the Neosky spec sheet). Also shows the calmest dry window that day |
+| **Verdict** | Good to fly / Fly with care / Permission needed / Do not fly, with the reasons |
+
+Each of the 16 directions is scored on:
+
+- how far it stays green at the planned height
+- obstacles within 20 m of the flight height: buildings with their heights, masts, towers, chimneys
+- power lines, which are thin wires that obstacle sensors can miss
+- anything over 10 m on the climb-out
+- roads and railways (don't hover over traffic) and crowds (schools, hospitals, temples, markets, stadiums)
+- building density (emergency landing spots), water and trees
+- terrain rise
+- wind: flying out into the wind keeps the return leg downwind
+- sun glare on the camera
+
+Every check is saved under *Saved sites*.
+
+**Your restricted areas** are added under the planner and used for every site. Add a circle, or import polygons as GeoJSON or KML. Use this for areas the planner can't know about, such as a red zone you saw on DigitalSky or a customer's no-fly area.
+
+**Zone rules used (estimates — always confirm on [DigitalSky](https://digitalsky.dgca.gov.in)):**
+
+| Rule | Zone |
+|---|---|
+| Operational airport (and military aerodromes), 0–5 km from the perimeter | red (treated as no-fly) |
+| 5–8 km from the perimeter | yellow (ATC permission) |
+| 8–12 km from the perimeter | green up to 200 ft / 60 m (the planner lowers the flight height to stay green) |
+| Elsewhere | green up to 400 ft / 120 m |
+| Airstrips without scheduled service, within 5 km; heliports within 2 km | yellow (confirm on DigitalSky) |
+| International border / LoC / LAC, within 25 km | red; 25–35 km yellow because the public border lines can be a few km off |
+| Vijay Chowk, New Delhi, within 5 km | red |
+| Military areas, nuclear plants and government seats in OpenStreetMap | red inside, yellow (verify) nearby |
+
+The airport perimeter is approximated as 500 m around the runways (OurAirports data, bundled in `twin/data/airspace_india.json`; refresh it with `python tools/build_airspace_data.py`).
+
+**Internet access:** the server needs outbound internet for live data:
+
+- obstacles: OpenStreetMap via the Overpass API (set `TWIN_OVERPASS_URL` to use your own server)
+- terrain and weather: Open-Meteo
+
+If a source can't be reached, the plan says what wasn't checked and carries on.
+
+**Data credits:**
+
+- map data © OpenStreetMap contributors (ODbL)
+- weather and elevation by Open-Meteo.com (CC BY 4.0)
+- airports from OurAirports (public domain)
+- borders from Natural Earth (public domain)
+
 ## How the data gets there
 
 ```

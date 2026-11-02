@@ -58,6 +58,9 @@ VIDEO_READ_PASS = _env("TWIN_VIDEO_READ_PASS") or secrets.token_hex(16)
 
 TIMEZONE = _env("TWIN_TZ", "Asia/Kolkata")
 
+# Demo planner: OpenStreetMap Overpass server for obstacle data (public mirrors are tried after this one).
+OVERPASS_URL = _env("TWIN_OVERPASS_URL", "")
+
 # Model names and photos shown for each MSN; "064:Tavas,101:Nimble".
 MODEL_MAP = {}
 for part in _env("TWIN_MODEL_MAP", "").split(","):
