@@ -3,3 +3,4 @@
 .venv/
 __pycache__/
 recordings/
+node_modules/

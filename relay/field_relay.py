@@ -6,7 +6,7 @@ a secure WebSocket, and pushes the camera's RTSP video to the server's video ser
 own when the internet drops; telemetry received while offline is buffered (last 2 minutes) and sent on reconnect.
 Nothing is ever sent back to the drone.
 
-  python field_relay.py --server wss://twin.example.com --token <TWIN_INGEST_TOKEN> --msn 064 --model Tavas
+  python field_relay.py --server wss://twin.example.com --token <TWIN_INGEST_TOKEN> --gcs "GCS 01"
                         [--mavlink udpin:0.0.0.0:14551] [--rtsp rtsp://192.168.144.25:8554/main.264 --video-pass <TWIN_VIDEO_PUBLISH_PASS>]
 
 Mission Planner: press Ctrl+F > "Mavlink" > UDP Client, host 127.0.0.1, port 14551 (leave "Write access" off).
@@ -15,6 +15,7 @@ Without a GCS you can read the telemetry radio directly: --mavlink COM5:57600 (W
 """
 import argparse
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -41,6 +42,8 @@ class Stats:
         self.last_rx = 0.0
         self.video = "off"
         self.vehicles = set()
+        self.hello = None          # what the server says this GCS feeds (drone, video paths)
+        self.hello_event = threading.Event()
 
 
 def mavlink_reader(url, loop, q, stats, stop):
@@ -76,8 +79,34 @@ def mavlink_reader(url, loop, q, stats, stop):
             time.sleep(3)
 
 
+async def _read_server(ws, stats):
+    """The server sends a hello (which drone and video paths this GCS feeds) and latency pings."""
+    try:
+        async for msg in ws:
+            if not isinstance(msg, str):
+                continue
+            if msg.startswith("ping "):
+                await ws.send("pong " + msg[5:])
+            elif msg.startswith("{"):
+                try:
+                    j = json.loads(msg)
+                except ValueError:
+                    continue
+                if "hello" in j:
+                    stats.hello = j["hello"]
+                    stats.hello_event.set()
+                    h = j["hello"]
+                    print(f"[server] this GCS feeds {h.get('drone_id')} (video path {h.get('video_path')})")
+    except Exception:
+        pass
+
+
 async def sender(args, q, stats):
-    params = {"token": args.token, "msn": args.msn}
+    params = {"token": args.token}
+    if args.gcs:
+        params["gcs"] = args.gcs
+    if args.msn:
+        params["msn"] = args.msn
     if args.model:
         params["model"] = args.model
     url = f"{args.server.rstrip('/')}/ws/ingest?{urlencode(params)}"
@@ -88,10 +117,11 @@ async def sender(args, q, stats):
             async with websockets.connect(url, max_size=None, ping_interval=20, ping_timeout=20, open_timeout=15) as ws:
                 stats.connected = True
                 delay = 1
-                print(f"[server] connected to {args.server} as {args.msn}")
+                print(f"[server] connected to {args.server} as {args.gcs or args.msn}")
                 while backlog:  # telemetry received while offline
                     _, b = backlog.popleft()
                     await ws.send(b)
+                stats.reader = asyncio.ensure_future(_read_server(ws, stats))
                 closed = asyncio.ensure_future(ws.wait_closed())
                 while True:
                     getter = asyncio.ensure_future(q.get())
@@ -137,7 +167,7 @@ async def sender(args, q, stats):
             delay = min(30, delay * 2)
 
 
-def video_loop(args, stats, stop):
+def video_loop(args, stats, stop, sub=False):
     """Pull the camera's RTSP and push it to MediaMTX on the server; restart whenever it stops."""
     ff = shutil.which(args.ffmpeg) or (args.ffmpeg if os.path.exists(args.ffmpeg) else None)
     if not ff:
@@ -146,7 +176,13 @@ def video_loop(args, stats, stop):
         return
     host = urlparse(args.server).hostname
     dest = args.video_server or f"rtsp://{host}:8554"
-    path = "".join(c if c.isalnum() or c in "-_" else "_" for c in args.msn)
+    # the server tells us the video path of the drone this GCS feeds
+    if not stats.hello_event.wait(20):
+        print("[video] no answer from the server yet; using the MSN as the video path")
+    hello = stats.hello or {}
+    path = hello.get("video_sub_path" if sub else "video_path") or (
+        "".join(c if c.isalnum() or c in "-_" else "_" for c in (args.msn or args.gcs or "drone")) + ("_sub" if sub else ""))
+    src = args.rtsp_sub if sub else args.rtsp
     p = urlparse(dest)
     target = f"rtsp://relay:{quote(args.video_pass, safe='')}@{p.hostname}:{p.port or 8554}/{path}"
     shown = f"rtsp://relay:***@{p.hostname}:{p.port or 8554}/{path}"
@@ -155,10 +191,12 @@ def video_loop(args, stats, stop):
                  "-vf", f"scale=-2:{args.height}", "-g", "30", "-b:v", args.bitrate, "-an"]
     else:
         codec = ["-c", "copy", "-an"]
-    cmd = [ff, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", args.rtsp,
+    if sub and not args.transcode:
+        codec = ["-c", "copy", "-an"]
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", src,
            *codec, "-f", "rtsp", "-rtsp_transport", "tcp", target]
     while not stop.is_set():
-        print(f"[video] {args.rtsp} -> {shown}")
+        print(f"[video] {src} -> {shown}")
         stats.video = "streaming"
         t0 = time.time()
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
@@ -187,6 +225,8 @@ async def main_async(args):
     threading.Thread(target=mavlink_reader, args=(args.mavlink, loop, q, stats, stop), daemon=True).start()
     if args.rtsp:
         threading.Thread(target=video_loop, args=(args, stats, stop), daemon=True).start()
+    if args.rtsp_sub:
+        threading.Thread(target=video_loop, args=(args, stats, stop, True), daemon=True).start()
     await asyncio.gather(sender(args, q, stats), status(stats))
 
 
@@ -194,10 +234,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", required=True, help="Live Twin address, e.g. wss://twin.example.com (ws:// on a LAN)")
     ap.add_argument("--token", required=True, help="TWIN_INGEST_TOKEN from the server's .env")
-    ap.add_argument("--msn", required=True, help="drone serial number shown in the twin, e.g. 064")
+    ap.add_argument("--gcs", default="", help='this ground station\'s ID in the command centre, e.g. "GCS 01" (it feeds TAVAS 01)')
+    ap.add_argument("--msn", default="", help="older setups without GCS IDs: the drone serial number, e.g. 064")
     ap.add_argument("--model", default="", help="drone model, e.g. Tavas")
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14551", help="where MAVLink comes from (default: GCS forward to UDP 14551)")
     ap.add_argument("--rtsp", help="camera RTSP URL, e.g. rtsp://192.168.144.25:8554/main.264")
+    ap.add_argument("--rtsp-sub", help="optional low-bitrate sub stream of the camera, used for the 15-feed video wall")
     ap.add_argument("--video-pass", default="", help="TWIN_VIDEO_PUBLISH_PASS from the server's .env")
     ap.add_argument("--video-server", help="override the video server, e.g. rtsp://twin.example.com:8554")
     ap.add_argument("--transcode", action="store_true", help="re-encode to H.264 (use when the camera sends H.265 or a high bitrate)")
@@ -205,7 +247,9 @@ def main():
     ap.add_argument("--bitrate", default="1500k", help="output bitrate when transcoding (default 1500k)")
     ap.add_argument("--ffmpeg", default="ffmpeg", help="path to ffmpeg if it is not on PATH")
     args = ap.parse_args()
-    if args.rtsp and not args.video_pass:
+    if not args.gcs and not args.msn:
+        ap.error("give --gcs (e.g. \"GCS 01\") or --msn")
+    if (args.rtsp or args.rtsp_sub) and not args.video_pass:
         ap.error("--video-pass is required with --rtsp")
     try:
         asyncio.run(main_async(args))

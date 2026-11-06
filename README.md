@@ -1,27 +1,84 @@
-# Neosky Live Twin
+# TAVAS Digital Twin Command Centre
 
-A live digital twin of every Neosky drone in the air, anywhere in the country. One web page shows:
+One control-room application that watches **15 TAVAS drones at once**. Each drone has its own ground station (GCS 01 → TAVAS 01 … GCS 15 → TAVAS 15); the command centre collects telemetry and video from every GCS independently and shows them together.
 
-- **Map:** every drone on a satellite or street map, with its real flight path, home point and heading. Drones flying, on the ground, with a lost link or offline are colour-coded.
-- **Camera:** live video from the selected drone (WebRTC, about half a second of delay; HLS as a fallback).
-- **Attitude twin:** a 3D model of the drone that rolls and pitches with the real aircraft. Its propellers spin with the real motor outputs, and a motor pod turns red when that motor is saturated.
-- **ODS (obstacle detection):** a radar of the proximity sensors and rangefinders (8 sectors plus up and down), showing the nearest obstacle.
-- **Readouts:** altitude, range from home, ground speed, climb rate, satellites, HDOP, GPS fix, link quality, battery voltage, current, battery %, mAh used, distance flown, EKF variance, vibration and throttle, all colour-coded against limits.
-- **Charts:** altitude, voltage, satellites and current for the last 5 minutes.
-- **This flight:** time since arming, cold-start time, and every failsafe or fault with the time, distance from home, altitude and voltage when it happened. Also shows the pre-arm failures.
-- **Messages:** every status message from the autopilot (errors in red, warnings in amber).
-- **Fleet statistics**, for all drones or one drone, all time / today / 7 / 30 days:
-  - averages per flight: flight time, distance travelled, range achieved, altitude, max voltage, min voltage, current, cold-start time
-  - failsafes: average flight time when the battery failsafe triggered (and the voltage then), and average distance from home when the GCS or RC failsafe triggered
-  - number of flights with a crash, potential thrust loss, motor issue, GPS issue, EKF issue, pre-arm issue, high vibration, or each failsafe
-  - total system errors, pilot errors and flights yet to decide (as set in Flight history)
-  - flights recorded, telemetry logs, hours and km flown
-- **Flight history:** every flight from arming to disarming. For each one you can:
-  - replay its path on the map, with failsafes and the crash site marked
-  - set the root cause (pilot error, system error or yet to decide)
-  - download its telemetry log (.tlog), which opens in Mission Planner or MAVExplorer
+> **Status: Phase 1 prototype.** Everything below runs today against the included 15-drone simulator. It is **not production-ready** until it has been connected to the real TAVAS GCS units and tested with several drones flying at once. The GCS protocol of the TAVAS handheld controller has not been verified yet (see *Connecting the ground stations*).
 
-The twin only listens. It never sends anything to an aircraft.
+**Monitoring only.** The command centre never sends commands to a drone and never writes to a GCS. Any future command interface would have to be built and safety-validated separately.
+
+## Sections
+
+| Section | What it shows |
+|---|---|
+| **Fleet Overview** | 5 × 3 tiles, one per drone: live video, status, battery, altitude, ground speed, GPS, signal, mode, flight time, link and a warning badge. Tile colour: green normal, blue airborne, yellow warning, red critical, grey offline. The top bar counts total / airborne / on ground / warnings / critical / disconnected, average battery and the fleet's flight time today. |
+| **Live Video Wall** | All 15 feeds in a 5 × 3 grid, each independent (one feed failing never stops the others). Click a feed to enlarge it, open its digital twin, go full screen, or go back to the grid. Unavailable feeds are marked. The wall uses each camera's low-bitrate sub-stream when one is set up, and feeds scrolled off screen pause. |
+| **Drone Digital Twin** | One drone in detail: full-screen video with ID, timestamp, recording and measured latency; a 3D model of the TAVAS that follows pitch, roll and yaw (drag to rotate, scroll to zoom) with motor outputs and direction of travel; every telemetry value; battery / voltage / altitude / speed / signal charts; a map with position, home, take-off point, trajectory, geofence and the other drones; open alerts, flight-controller messages, component health and obstacle-sensor (ODS) distances. |
+| **Fleet Map** | All drones on one map with their trajectories, homes and geofences. |
+| **Alerts & Notifications** | Open and past alerts with drone, GCS, message, severity, time, position, the parameter that triggered it, its source and acknowledgement. Critical alerts flash in a banner until someone acknowledges them. Clicking an alert opens that drone. |
+| **Fleet Health** | A score per drone from the components it actually reports (battery, motors, ESC, GPS, flight controller, link, camera, sensors, temperature). Components without data are shown as "no data" and left out of the score. |
+| **GCS Connections** | Each GCS's adapter, connection state, last data, telemetry round-trip, data rate, link quality, video stream and 24-hour disconnection history. |
+| **Flight History** | Every flight per drone with take-off, landing, duration, altitude, speed, battery used, mission completion, events and root cause; per-flight map replay, PDF report and telemetry CSV. |
+| **Analytics & Reports** | Flight hours, distance and alerts by drone and by type; fleet PDF report; flight and alert CSV exports. |
+| **Demo Planner** | Checks a customer's demo site against DGCA zones, obstacles, terrain and weather and suggests the safest flying direction (see below). |
+| **System Settings** | Per-GCS adapter and video settings, alert thresholds, users and roles. |
+
+### Where alerts come from
+
+Alerts are never invented. Each one has a `source`:
+
+- **flight controller**: the autopilot's own STATUSTEXT message, quoted as sent (failsafes, EKF/compass/GPS errors, crash and thrust-loss messages, severity ERROR or worse);
+- **threshold rule**: a measured value crossing a limit set in *System settings → Alert thresholds* (battery %, cell voltage, satellites, HDOP, link and RSSI, telemetry and video loss, discharge rate, ESC/motor temperature, compass variance, attitude, descent rate, geofence, saturated motor output). The alert shows the parameter, its value and the limit.
+
+Condition alerts clear themselves when the value recovers; critical alerts stay listed until acknowledged.
+
+### Roles
+
+| Role | Can |
+|---|---|
+| viewer | watch everything |
+| operator | also acknowledge alerts, set flight root causes, use the demo planner, reconnect a GCS adapter |
+| admin | also change GCS adapters, thresholds and users |
+
+Users are stored in the database. On the first start, the users from `TWIN_PASSWORD` / `TWIN_USERS` are created (the first is admin).
+
+## Connecting the ground stations
+
+Each of the 15 slots has its own **telemetry adapter** and **video source**, set in *System settings → Fleet & GCS adapters*. Every adapter runs on its own; a GCS that drops out or sends bad data never affects the others, and the app reconnects by itself.
+
+| Adapter | Status | Use when |
+|---|---|---|
+| Field relay (WebSocket) | tested with the 15-drone simulator; not yet with a real GCS | the GCS forwards MAVLink to `relay/field_relay.py` (Mission Planner, QGroundControl, or a telemetry radio on a laptop) |
+| MAVLink over UDP | tested with a MAVLink test sender; not yet with a real GCS | the GCS sends MAVLink straight to the server over a LAN/VPN (port 14600 + slot number) |
+| MAVLink over TCP | tested with a MAVLink test server; not yet with a real GCS | the GCS offers a MAVLink TCP server |
+| REST / manufacturer protocol | **awaiting protocol verification** | placeholders: they show as "Awaiting protocol verification" and stay off until the GCS maker's protocol is documented and tested |
+
+| Video source | |
+|---|---|
+| Pushed by the field relay | the relay pushes the camera's RTSP (and optional sub-stream) to the video server |
+| Pull RTSP | the video server pulls the camera or GCS RTSP address directly |
+
+**Not yet verified:** which app runs on the TAVAS 7-inch handheld GCS, whether it can forward MAVLink, and the camera's RTSP address. These must be confirmed on real hardware before field use.
+
+## Try it with 15 simulated drones
+
+```bash
+pip install -r requirements.txt
+mediamtx deploy/mediamtx-local.yml &                 # MediaMTX v1.9.3
+TWIN_INGEST_TOKEN=tok TWIN_VIDEO_PUBLISH_PASS=vpub uvicorn twin.app:app --port 8080 &
+python tools/fleet_sim.py --server ws://127.0.0.1:8080 --token tok --video rtsp://relay:vpub@127.0.0.1:8554
+```
+
+The simulator opens 15 separate GCS connections and 15 camera streams (test patterns labelled "SIMULATED CAMERA"). Each drone takes off, flies a patrol and returns. Some slots play scenarios so every alert path can be seen: 03 low battery, 05 fast discharge, 06 GPS degradation, 08 stays on the ground, 09 telemetry drop, 11 compass inconsistency, 13 motor failure, 14 video drop, 15 never connects. Use `--no-faults` for a clean fleet.
+
+## Web interface source
+
+The interface is a React + TypeScript app in `frontend/` (Three.js for the 3D model, Leaflet for maps). A built copy is committed in `twin/static/cc`, so the server runs without Node. After changing the interface:
+
+```bash
+cd frontend && npm ci && npm run build      # type-checks, then writes twin/static/cc
+```
+
+The Docker image builds it automatically.
 
 ## Demo planner
 
@@ -83,7 +140,7 @@ If a source can't be reached, the plan says what wasn't checked and carries on.
 ## How the data gets there
 
 ```
- drone ──radio──► GCS laptop (Mission Planner / QGC) ──forward──► field_relay.py ──wss://──► Live Twin server ──► browsers
+ drone ──radio──► GCS NN (Mission Planner / QGC) ──forward──► field_relay.py --gcs "GCS NN" ──wss://──► command centre ──► browsers
  camera ──RTSP──────────────────────────────────────────────────► field_relay.py ──rtsp──► MediaMTX (video) ─┘
 ```
 
@@ -98,7 +155,6 @@ The **field relay** (`relay/field_relay.py`) runs on the ground-station laptop:
 You need a small cloud VM with a public DNS name, for example `twin.neosky.in`.
 
 ```bash
-cd live-twin
 cp .env.example .env        # set every password/secret, TWIN_DOMAIN and PUBLIC_HOST to your DNS name
 docker compose up -d --build
 ```
@@ -126,7 +182,7 @@ mediamtx deploy/mediamtx-local.yml                         # video; MediaMTX v1.
 ## Field laptop setup (once per laptop)
 
 1. Install Python 3.10 or newer and ffmpeg (`winget install ffmpeg`).
-2. Copy the `relay` folder to the laptop. Edit the six lines at the top of `run_relay.bat`: server address, token, MSN, model, camera URL and video password.
+2. Copy the `relay` folder to the laptop. Edit the lines at the top of `run_relay.bat`: server address, token, GCS name (`GCS 01` … `GCS 15`), camera URL, optional sub-stream and video password.
 3. In **Mission Planner** press `Ctrl+F` → **Mavlink** → choose **UDP Client**, host `127.0.0.1`, port `14551`, and leave *Write access* unticked.
    In **QGroundControl**: Application Settings → MAVLink → *Enable MAVLink forwarding* → `127.0.0.1:14551`.
 4. Double-click `run_relay.bat`. Every 10 s it prints whether the server is connected, how many packets were sent and whether video is streaming.
@@ -135,7 +191,7 @@ Without a GCS, the relay can read the telemetry radio directly: `--mavlink COM5:
 
 **Camera:** use the camera's RTSP address, for example `rtsp://192.168.144.25:8554/main.264` for SIYI cameras. Browsers play H.264 over WebRTC everywhere. If the camera sends H.265 or a very high bitrate, add `--transcode` (re-encodes to 720p H.264 at 1.5 Mbit/s) or set the camera to H.264.
 
-## Try it without a drone
+## Replay a real flight log
 
 `tools/replay_log.py` plays an ArduPilot `.bin` log as if the drone were flying now. It turns GPS, attitude, battery, EKF, vibration, motor outputs, proximity/rangefinders, modes, arming, messages and error events into live MAVLink:
 
