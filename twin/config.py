@@ -58,6 +58,15 @@ VIDEO_READ_PASS = _env("TWIN_VIDEO_READ_PASS") or secrets.token_hex(16)
 
 TIMEZONE = _env("TWIN_TZ", "Asia/Kolkata")
 
+# Command centre: number of drone slots (TAVAS 01 .. TAVAS N, each with its own GCS) and how long to keep 1 Hz telemetry.
+FLEET_SIZE = int(_env("TWIN_FLEET_SIZE", "15"))
+TELEMETRY_KEEP_DAYS = int(_env("TWIN_TELEMETRY_KEEP_DAYS", "90"))
+# MediaMTX control API (status of every video path, recording, pulling RTSP from a GCS).
+MEDIAMTX_API = _env("TWIN_MEDIAMTX_API", "http://127.0.0.1:9997").rstrip("/")
+
+# Demo planner: OpenStreetMap Overpass server for obstacle data (public mirrors are tried after this one).
+OVERPASS_URL = _env("TWIN_OVERPASS_URL", "")
+
 # Model names and photos shown for each MSN; "064:Tavas,101:Nimble".
 MODEL_MAP = {}
 for part in _env("TWIN_MODEL_MAP", "").split(","):

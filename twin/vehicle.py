@@ -113,6 +113,12 @@ class Flight:
         self.last_pt_t = -1e9
         self.home = drone.home
         self.modes = [drone.mode] if drone.mode else []
+        self.batt_start = drone.t.get("batt_pct")
+        self.batt_end = None
+        self.takeoff_ts = None
+        self.landing_ts = None
+        self.drone_id = drone.drone_id
+        self.gcs_id = drone.gcs_id
         self.end_reason = None
         self.tlog = None
         self.tlog_path = None
@@ -172,13 +178,31 @@ class Flight:
             "modes": self.modes[-50:],
             "home": self.home,
             "end_reason": self.end_reason,
+            "drone_id": self.drone_id, "gcs_id": self.gcs_id,
+            "takeoff_ts": self.takeoff_ts, "landing_ts": self.landing_ts,
+            "batt_start_pct": self.batt_start, "batt_end_pct": drone.t.get("batt_pct") if self.batt_end is None else self.batt_end,
+            "mission": {"total": drone.mission.get("total"), "reached": drone.mission.get("reached"),
+                        "completed": bool(drone.mission.get("total") and drone.mission.get("reached") is not None
+                                          and drone.mission["reached"] >= drone.mission["total"] - 1),
+                        "flown_auto": "AUTO" in self.modes},
         }
 
 
 class Drone:
-    def __init__(self, hub, key, msn, model, sysid):
+    def __init__(self, hub, key, msn, model, sysid, slot=None):
         self.hub = hub
         self.key, self.msn, self.model, self.sysid = key, msn, model, sysid
+        self.slot = slot
+        self.drone_id = slot["drone_id"] if slot else (msn or key)
+        self.gcs_id = slot["gcs_id"] if slot else None
+        self.airborne = False
+        self.takeoff_pos = None
+        self.mission = {"seq": None, "total": None}
+        self.fence = None
+        self.esc = {}           # motor index -> {rpm, temp, current, voltage, ts}
+        self.temps = {}         # name -> (deg C, ts)
+        self.sensors = None     # (present, enabled, health) bitmasks from SYS_STATUS
+        self.alert_ctx = {}     # scratch space for the alert engine
         self.first_seen = time.time()
         self.last_hb = 0.0
         self.last_rx = 0.0
@@ -223,10 +247,19 @@ class Drone:
     def dist_home(self):
         return haversine(self.home, self.pos()) if self.home else None
 
-    def add_msg(self, sev, text, now):
-        self.msgs.append({"ts": now, "sev": sev, "text": text})
+    def add_msg(self, sev, text, now, from_fc=False):
+        self.msgs.append({"ts": now, "sev": sev, "text": text, "fc": from_fc})
         fid = self.flight.id if self.flight else None
         self.hub.store.add_message(self.key, fid, now, sev, text)
+
+    def notify(self, name, *args):
+        al = self.hub.alerts
+        if al is not None:
+            try:
+                getattr(al, name)(self, *args)
+            except Exception:  # an alert bug must never stop telemetry
+                import logging
+                logging.getLogger("twin.alerts").exception("alert hook %s failed", name)
 
     def event(self, kind, text, now, **extra):
         f = self.flight
@@ -244,6 +277,7 @@ class Drone:
         if kind in f.flags:
             f.flags[kind] = True
             f.counts[kind] = f.counts.get(kind, 0) + 1
+        self.notify("flight_event", e)
 
     # ----- packet handling
     def raw(self, msg, now):
@@ -298,16 +332,28 @@ class Drone:
         if mode != self.mode:
             if self.flight:
                 self.flight.modes.append(mode)
+            old = self.mode
             if self.mode:
                 self.add_msg(6, f"Mode {self.mode} → {mode}", now)
             self.mode = mode
+            if old:
+                self.notify("mode_change", old, mode)
         armed = bool(m.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
         if armed and not self.armed:
             self.armed = True
             self.open_flight(now)
+            self.notify("armed")
         elif not armed and self.armed:
             self.armed = False
+            if self.airborne:
+                self.airborne = False
+                if self.flight:
+                    self.flight.landing_ts = now
+                self.notify("landed")
+            if self.flight and not self.flight.landing_ts:
+                self.flight.landing_ts = now
             self.close_flight(now, "disarmed")
+            self.notify("disarmed")
 
     def on_SYSTEM_TIME(self, m, now):
         if m.time_boot_ms:
@@ -327,6 +373,22 @@ class Drone:
         self.t.update(lat=lat, lon=lon, alt=alt, alt_msl=m.alt / 1000.0,
                       heading=(m.hdg / 100.0) if m.hdg != 65535 else self.t.get("yaw"),
                       vz=-m.vz / 100.0)
+        if self.armed and not self.airborne and alt > 2.0:
+            self.airborne = True
+            self.takeoff_pos = (lat, lon)
+            if self.flight and not self.flight.takeoff_ts:
+                self.flight.takeoff_ts = now
+            self.notify("took_off")
+        elif self.airborne and self.armed and alt < 0.5 and abs(m.vz) < 30:
+            ctx = self.alert_ctx.setdefault("land_since", now)
+            if now - ctx > 3:
+                self.airborne = False
+                self.alert_ctx.pop("land_since", None)
+                if self.flight:
+                    self.flight.landing_ts = now
+                self.notify("landed")
+        else:
+            self.alert_ctx.pop("land_since", None)
         f = self.flight
         if f:
             fix_ok = (self.t.get("fix") or 0) >= 3
@@ -374,8 +436,8 @@ class Drone:
         v = m.voltage_battery / 1000.0 if m.voltage_battery not in (0, 65535) else None
         c = m.current_battery / 100.0 if m.current_battery >= 0 else None
         pct = m.battery_remaining if m.battery_remaining >= 0 else None
-        self.t.update(volt=v, curr=c, batt_pct=pct, sensors_health=m.onboard_control_sensors_health,
-                      sensors_enabled=m.onboard_control_sensors_enabled)
+        self.t.update(volt=v, curr=c, batt_pct=pct, load=m.load / 10.0)
+        self.sensors = (m.onboard_control_sensors_present, m.onboard_control_sensors_enabled, m.onboard_control_sensors_health, now)
         f = self.flight
         if f and v:
             f.v_max = v if f.v_max is None else max(f.v_max, v)
@@ -396,6 +458,7 @@ class Drone:
                 f.mah = m.current_consumed
         if m.temperature != 32767:
             self.t["batt_temp"] = m.temperature / 100.0
+            self.temps["battery"] = (m.temperature / 100.0, now)
 
     def on_VFR_HUD(self, m, now):
         self.t.update(gs=m.groundspeed, airspeed=m.airspeed, climb=m.climb, throttle=m.throttle)
@@ -481,6 +544,36 @@ class Drone:
             ang = round((off + i * inc) % 360)
             self.ods[ang] = (round(cm / 100.0, 2), mx, now)
 
+    def _esc(self, base, m, now):
+        for i in range(4):
+            self.esc[base + i] = {"rpm": m.rpm[i], "temp": m.temperature[i], "current": round(m.current[i] / 100.0, 2),
+                                  "voltage": round(m.voltage[i] / 100.0, 2), "ts": now}
+            if m.temperature[i]:
+                self.temps[f"esc{base + i + 1}"] = (m.temperature[i], now)
+
+    def on_ESC_TELEMETRY_1_TO_4(self, m, now):
+        self._esc(0, m, now)
+
+    def on_ESC_TELEMETRY_5_TO_8(self, m, now):
+        self._esc(4, m, now)
+
+    def on_SCALED_PRESSURE(self, m, now):
+        self.temps["flight controller"] = (m.temperature / 100.0, now)
+
+    def on_MISSION_CURRENT(self, m, now):
+        total = getattr(m, "total", None)
+        prev = self.mission.get("seq")
+        self.mission.update(seq=m.seq, total=total if total not in (None, 0, 65535) else self.mission.get("total"), ts=now)
+        if prev is not None and m.seq != prev:
+            self.notify("mission_progress", prev, m.seq)
+
+    def on_MISSION_ITEM_REACHED(self, m, now):
+        self.mission["reached"] = m.seq
+        self.notify("mission_reached", m.seq)
+
+    def on_FENCE_STATUS(self, m, now):
+        self.fence = {"breach": bool(m.breach_status), "count": m.breach_count, "type": m.breach_type, "ts": now}
+
     def on_STATUSTEXT(self, m, now):
         text = m.text
         if isinstance(text, bytes):
@@ -496,7 +589,8 @@ class Drone:
             text = "".join(self.statustext_chunks.pop(mid))
         if not text:
             return
-        self.add_msg(m.severity, text, now)
+        self.add_msg(m.severity, text, now, from_fc=True)
+        self.notify("fc_text", m.severity, text)
         if PREARM.match(text):
             if text not in self.prearm_seen:
                 self.prearm_seen.append(text)
@@ -507,7 +601,7 @@ class Drone:
             return
         for kind, rx in PATTERNS:
             if rx.search(text):
-                self.event(kind, text, now)
+                self.event(kind, text, now, src="fc")
                 break
 
     # ----- flights
@@ -565,40 +659,76 @@ class Drone:
             if f.tlog:
                 f.tlog.flush()
 
-    # ----- snapshot for the browser
-    def snapshot(self, now):
-        t = self.t
-        f = self.flight
-        ods = []
-        for ang, (d, mx, ts) in list(self.ods.items()):
-            if now - ts < 5:
-                ods.append({"a": ang, "d": d, "max": mx})
-        link = None
+    # ----- snapshots for the browser
+    def link_pct(self):
         tot = self.seq_recv + self.seq_lost
-        if tot > 20:
-            link = round(100 * self.seq_recv / tot)
-        sev_msgs = [m for m in self.msgs][-30:]
+        return round(100 * self.seq_recv / tot) if tot > 20 else None
+
+    def rssi_pct(self):
+        r = self.t.get("radio")
+        if r and r.get("rssi") not in (None, 255):
+            return round(r["rssi"] / 254 * 100)
+        return self.t.get("rc_rssi")
+
+    def flight_time(self):
+        return round(self.flight.elapsed(self)) if self.flight else None
+
+    def compact(self, now):
+        """What every tile, the wall and the map need (sent for all drones, 4 times a second)."""
+        t = self.t
         return {
-            "key": self.key, "msn": self.msn, "model": self.model, "sysid": self.sysid,
-            "status": self.status(now), "armed": self.armed, "mode": self.mode,
+            "key": self.key, "drone_id": self.drone_id, "gcs_id": self.gcs_id, "msn": self.msn, "model": self.model,
+            "slot": self.slot["slot"] if self.slot else None, "enabled": self.slot.get("enabled", True) if self.slot else True,
+            "conn": self.status(now), "armed": self.armed, "airborne": self.airborne, "mode": self.mode,
             "last_seen_s": round(now - self.last_hb, 1) if self.last_hb else (round(now - self.last_seen_saved) if self.last_seen_saved else None),
             "lat": t.get("lat"), "lon": t.get("lon"), "alt": _r(t.get("alt"), 1), "alt_msl": _r(t.get("alt_msl"), 1),
-            "heading": _r(t.get("heading"), 0), "roll": _r(t.get("roll"), 1), "pitch": _r(t.get("pitch"), 1), "yaw": _r(t.get("yaw"), 1),
-            "gs": _r(t.get("gs"), 1), "climb": _r(t.get("climb"), 1), "throttle": t.get("throttle"),
-            "volt": _r(t.get("volt"), 2), "curr": _r(t.get("curr"), 1), "batt_pct": t.get("batt_pct"), "mah": t.get("mah"),
+            "heading": _r(t.get("heading"), 0), "gs": _r(t.get("gs"), 1), "climb": _r(t.get("climb"), 1),
+            "batt_pct": t.get("batt_pct"), "volt": _r(t.get("volt"), 2), "curr": _r(t.get("curr"), 1),
             "fix": t.get("fix"), "sats": t.get("sats"), "hdop": _r(t.get("hdop"), 2),
-            "ekf": t.get("ekf"), "vibe": t.get("vibe"), "rc_rssi": t.get("rc_rssi"), "radio": t.get("radio"),
-            "link_pct": link, "motors": self.motors, "ods": ods, "rangefinder": self.rangefinder,
-            "home": self.home, "range": _r(self.dist_home(), 0),
-            "boot_s": _r(self.boot_s, 0),
-            "flight": ({"id": f.id, "time_s": _r(f.elapsed(self), 0), "distance_m": _r(f.distance, 0),
-                        "max_range": _r(f.max_range, 0), "max_alt": _r(f.max_alt, 1), "cold_start_s": f.cold_start_s,
-                        "events": f.events[-30:], "flags": f.flags, "prearm": f.prearm} if f else None),
-            "last_flight_id": self.last_flight_id,
-            "prearm": self.prearm_seen[-10:],
-            "msgs": sev_msgs,
-            "video": safe_name(self.msn),
+            "link_pct": self.link_pct(), "rssi": self.rssi_pct(),
+            "home": self.home, "takeoff": self.takeoff_pos, "range": _r(self.dist_home(), 0),
+            "flight_s": self.flight_time(), "flight_id": self.flight.id if self.flight else self.last_flight_id,
         }
+
+    def detail(self, now):
+        """Everything for the drone's digital-twin screen (sent only for the drone being viewed)."""
+        t = self.t
+        f = self.flight
+        ods = [{"a": ang, "d": d, "max": mx} for ang, (d, mx, ts) in list(self.ods.items()) if now - ts < 5]
+        temps = {k: round(v, 1) for k, (v, ts) in self.temps.items() if now - ts < 30}
+        esc = [dict(v, i=i) for i, v in sorted(self.esc.items()) if now - v["ts"] < 10]
+        out = self.compact(now)
+        out.update({
+            "roll": _r(t.get("roll"), 1), "pitch": _r(t.get("pitch"), 1), "yaw": _r(t.get("yaw"), 1),
+            "airspeed": _r(t.get("airspeed"), 1), "throttle": t.get("throttle"), "mah": t.get("mah"), "load": t.get("load"),
+            "ekf": t.get("ekf"), "vibe": t.get("vibe"), "radio": t.get("radio"), "rc_rssi": t.get("rc_rssi"),
+            "motors": self.motors, "esc": esc, "temps": temps, "ods": ods, "rangefinder": self.rangefinder,
+            "system_status": self.system_status, "vehicle_type": self.vehicle_type, "sysid": self.sysid,
+            "sensors": self.sensor_report(), "mission": self.mission, "fence": self.fence, "boot_s": _r(self.boot_s, 0),
+            "flight": ({"id": f.id, "time_s": _r(f.elapsed(self), 0), "distance_m": _r(f.distance, 0),
+                        "max_range": _r(f.max_range, 0), "max_alt": _r(f.max_alt, 1), "max_speed": _r(f.max_speed, 1),
+                        "cold_start_s": f.cold_start_s, "events": f.events[-30:], "prearm": f.prearm} if f else None),
+            "prearm": self.prearm_seen[-10:],
+            "msgs": list(self.msgs)[-40:],
+            "geofence": (self.slot or {}).get("geofence"), "battery_cells": (self.slot or {}).get("battery_cells"),
+        })
+        return out
+
+    SENSOR_BITS = [
+        (0x01, "3D gyro"), (0x02, "3D accelerometer"), (0x04, "3D magnetometer"), (0x08, "absolute pressure"),
+        (0x20, "GPS"), (0x8000, "motor outputs"), (0x10000, "RC receiver"), (0x200000, "AHRS"),
+        (0x2000000, "battery"), (0x8000000, "logging"), (0x10000000, "proximity"),
+    ]
+
+    def sensor_report(self):
+        if not self.sensors:
+            return None
+        present, enabled, health, ts = self.sensors
+        out = []
+        for bit, name in self.SENSOR_BITS:
+            if present & bit and enabled & bit:
+                out.append({"name": name, "ok": bool(health & bit)})
+        return out
 
 
 def safe_name(s):
@@ -612,12 +742,33 @@ class Hub:
         self.store = store
         self.drones = {}
         self.sources = {}  # source id -> parser
-        for d in store.drones():
+        self.alerts = None  # AlertEngine, attached by the app
+        self.fleet = None   # FleetManager, attached by the app
+        self._saved = {d["key"]: d for d in store.drones()}
+        for d in self._saved.values():
+            if d["key"].startswith("TAVAS-"):
+                continue  # fleet slots are created by register_slot
             dr = Drone(self, d["key"], d["msn"], d["model"], d["sysid"])
             dr.last_seen_saved = d.get("last_seen")
             if d.get("last_lat") is not None:
                 dr.t.update(lat=d["last_lat"], lon=d["last_lon"])
             self.drones[d["key"]] = dr
+
+    def register_slot(self, slot):
+        d = self.drones.get(slot["key"])
+        if d is None:
+            d = Drone(self, slot["key"], slot.get("msn") or slot["drone_id"], slot.get("model"), None, slot=slot)
+            saved = self._saved.get(slot["key"])
+            if saved:
+                d.last_seen_saved = saved.get("last_seen")
+                d.sysid = saved.get("sysid")
+                if saved.get("last_lat") is not None:
+                    d.t.update(lat=saved["last_lat"], lon=saved["last_lon"])
+            self.drones[slot["key"]] = d
+        d.slot = slot
+        d.drone_id, d.gcs_id = slot["drone_id"], slot["gcs_id"]
+        d.msn = slot.get("msn") or slot["drone_id"]
+        d.model = slot.get("model") or d.model
 
     def parser(self, source):
         p = self.sources.get(source)
@@ -655,7 +806,9 @@ class Hub:
                 self.store.upsert_drone(key, d.msn, d.model, sysid)
         return d
 
-    def feed(self, source, data, msn=None, model=None):
+    def feed(self, source, data, msn=None, model=None, slot=None):
+        """Parse a chunk of MAVLink from one source. With `slot`, the source is that drone's own GCS: every
+        autopilot message on it belongs to that drone (other vehicles heard on the same link are ignored)."""
         now = time.time()
         try:
             msgs = self.parser(source).parse_buffer(data) or []
@@ -668,7 +821,21 @@ class Hub:
             sysid = msg.get_srcSystem()
             if sysid in (0, 255):
                 continue
-            d = self.resolve(msn, model, sysid, msg)
+            if slot is not None:
+                d = self.drones.get(slot["key"])
+                if d is None:
+                    continue
+                if d.sysid is None or not d.last_hb or now - d.last_hb > 30:
+                    if msg.get_type() != "HEARTBEAT" or msg.autopilot == mavlink.MAV_AUTOPILOT_INVALID or msg.type in NON_VEHICLE_TYPES:
+                        if d.sysid != sysid:
+                            continue
+                    elif d.sysid != sysid:
+                        d.sysid = sysid
+                        self.store.upsert_drone(d.key, d.msn, d.model, sysid)
+                elif sysid != d.sysid:
+                    continue
+            else:
+                d = self.resolve(msn, model, sysid, msg)
             if d is None:
                 continue
             d.handle(msg, now)
@@ -688,9 +855,25 @@ class Hub:
             if d.t.get("lat") is not None and d.last_rx and now - d.last_rx < 30:
                 self.store.upsert_drone(d.key, d.msn, d.model, d.sysid, d.t.get("lat"), d.t.get("lon"))
 
-    def snapshot(self):
+    def ordered(self):
+        return sorted(self.drones.values(), key=lambda x: (x.slot["slot"] if x.slot else 999, x.msn or ""))
+
+    def compact(self):
         now = time.time()
-        return [d.snapshot(now) for d in sorted(self.drones.values(), key=lambda x: x.msn or "")]
+        return [d.compact(now) for d in self.ordered()]
+
+    def sample(self):
+        """One telemetry row per connected drone (stored at 1 Hz)."""
+        now = time.time()
+        rows = []
+        for d in self.drones.values():
+            if not d.last_rx or now - d.last_rx > 5 or d.t.get("lat") is None:
+                continue
+            t = d.t
+            rows.append((d.key, round(now, 1), d.flight.id if d.flight else None, t.get("lat"), t.get("lon"), _r(t.get("alt"), 1),
+                         _r(t.get("alt_msl"), 1), _r(t.get("gs"), 1), _r(t.get("heading"), 0), t.get("batt_pct"), _r(t.get("volt"), 2),
+                         _r(t.get("curr"), 1), t.get("sats"), _r(t.get("hdop"), 2), d.link_pct(), d.mode))
+        return rows
 
     def shutdown(self):
         now = time.time()

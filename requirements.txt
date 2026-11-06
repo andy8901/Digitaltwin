@@ -6,3 +6,4 @@ httpx==0.28.1
 itsdangerous==2.2.0
 python-multipart==0.0.32
 tzdata; sys_platform == "win32"
+reportlab==4.2.5

@@ -1,4 +1,4 @@
-# Neosky Live Twin: web app + video server (MediaMTX) + HTTPS (Caddy).
+# TAVAS Digital Twin Command Centre: web app + video server (MediaMTX) + HTTPS (Caddy).
 #   cp .env.example .env   # edit every secret, TWIN_DOMAIN and PUBLIC_HOST
 #   docker compose up -d --build
 # Open ports: 80/443 (web + relays), 8554/tcp (relays publish video), 8189/udp+tcp (WebRTC video to browsers).
@@ -9,6 +9,7 @@ services:
     environment:
       TWIN_MEDIAMTX_WEBRTC: http://mediamtx:8889
       TWIN_MEDIAMTX_HLS: http://mediamtx:8888
+      TWIN_MEDIAMTX_API: http://mediamtx:9997
     volumes:
       - twin-data:/app/data
     restart: unless-stopped

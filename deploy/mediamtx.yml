@@ -8,11 +8,12 @@ logLevel: info
 authMethod: http
 authHTTPAddress: http://twin:8080/internal/mtx-auth
 authHTTPExclude:
-  - action: api
   - action: metrics
 
+# Control API, used by the app (with its internal credentials) to read stream status and set up each drone's paths.
+# Reachable only inside the Docker network (not published).
 api: yes
-apiAddress: 127.0.0.1:9997
+apiAddress: :9997
 
 rtsp: yes
 protocols: [tcp]
