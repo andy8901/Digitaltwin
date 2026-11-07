@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { dateTimeOf } from '../lib/format';
 
 interface Slot {
-  slot: number; key: string; drone_id: string; gcs_id: string; msn: string; model: string; enabled: boolean; notes: string; battery_cells: number | null;
+  slot: number; key: string; drone_id: string; gcs_id: string; msn: string; model: string; enabled: boolean; notes: string; battery_cells: number | null; department?: string; customer?: string; location?: string;
   telemetry: { type: string; port?: number; host?: string; tcp_port?: number };
   video: { type: string; main_url?: string; sub_url?: string; record?: boolean };
   geofence: { type: string; radius_m?: number; max_alt_m?: number };
@@ -42,6 +42,9 @@ function SlotEditor({ s, types, vtypes, onSaved }: { s: Slot; types: Record<stri
         <label className="chk"><input type="checkbox" checked={!!v.record} onChange={(e) => set({ video: { ...v, record: e.target.checked } })} /> Record video</label>
         <label>Geofence radius (m)<input type="number" value={x.geofence?.radius_m ?? ''} onChange={(e) => set({ geofence: { ...x.geofence, type: 'circle', radius_m: Number(e.target.value) || undefined } })} /></label>
         <label>Geofence ceiling (m AGL)<input type="number" value={x.geofence?.max_alt_m ?? ''} onChange={(e) => set({ geofence: { ...x.geofence, type: 'circle', max_alt_m: Number(e.target.value) || undefined } })} /></label>
+        <label>Department<input value={x.department || ''} onChange={(e) => set({ department: e.target.value })} placeholder="e.g. Surveillance" /></label>
+        <label>Customer<input value={x.customer || ''} onChange={(e) => set({ customer: e.target.value })} /></label>
+        <label>Location<input value={x.location || ''} onChange={(e) => set({ location: e.target.value })} placeholder="e.g. Bengaluru" /></label>
         <label className="wide">Notes<input value={x.notes || ''} onChange={(e) => set({ notes: e.target.value })} /></label>
       </div>
       <div className="row"><button className="btn primary" onClick={save}>Save {x.drone_id}</button><span className="muted">{msg}</span></div>

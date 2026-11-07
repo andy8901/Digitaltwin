@@ -429,7 +429,8 @@ class Drone:
     def on_GPS_RAW_INT(self, m, now):
         sats = m.satellites_visible if m.satellites_visible != 255 else None
         hdop = m.eph / 100.0 if m.eph not in (0, 65535) else None
-        self.t.update(fix=m.fix_type, sats=sats, hdop=hdop)
+        self.t.update(fix=m.fix_type, sats=sats, hdop=hdop,
+                      h_acc=(m.h_acc / 1000.0) if getattr(m, "h_acc", 0) else None)   # metres, MAVLink 2 extension
         if not self.t.get("lat") and m.lat:
             self.t.update(lat=m.lat / 1e7, lon=m.lon / 1e7)
         f = self.flight
@@ -764,7 +765,7 @@ class Drone:
         out.update({
             "roll": _r(t.get("roll"), 1), "pitch": _r(t.get("pitch"), 1), "yaw": _r(t.get("yaw"), 1),
             "airspeed": _r(t.get("airspeed"), 1), "throttle": t.get("throttle"), "mah": t.get("mah"), "load": t.get("load"),
-            "ekf": t.get("ekf"), "vibe": t.get("vibe"), "radio": t.get("radio"), "rc_rssi": t.get("rc_rssi"),
+            "ekf": t.get("ekf"), "vibe": t.get("vibe"), "h_acc": _r(t.get("h_acc"), 2), "radio": t.get("radio"), "rc_rssi": t.get("rc_rssi"),
             "motors": self.motors, "esc": esc, "temps": temps, "ods": ods, "rangefinder": self.rangefinder,
             "system_status": self.system_status, "vehicle_type": self.vehicle_type, "sysid": self.sysid,
             "sensors": self.sensor_report(), "mission": self.mission, "fence": self.fence, "boot_s": _r(self.boot_s, 0),

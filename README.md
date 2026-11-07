@@ -41,6 +41,65 @@ The drone screen is split into four parts:
 - A drone fed by a field relay or a MAVLink adapter is shown as **REAL-TIME**.
 - A drone with nothing arriving is shown as **NO LIVE DATA**.
 
+## Flight analysis (v2.2)
+
+### Organization Overview
+Fleet statistics and flight-log management for all 15 drones.
+
+- **Filters:** department, drone type, drone, customer, location, date range and flight status. Set a drone's department, customer and location in *System settings → Fleet & GCS adapters*.
+- **KPI cards:** all calculated from the flights and logs stored in the command centre. With a date range set, each card also shows the change against the previous period of the same length.
+- **Lists:**
+  - recently received logs
+  - pending analysis
+  - critical incidents
+  - drone-wise records
+  - logs with errors
+  - analysed logs
+
+  Click a row to open its incident report.
+- **Upload flight log:** takes an ArduPilot on-board log (`.bin`) or a telemetry log (`.tlog`) and assigns it to a drone. A file that was already uploaded opens the existing report instead of creating a duplicate.
+
+### Incident reports
+Every finished flight, recorded live or uploaded, is analysed once in the background.
+
+**Verdict and read-outs:** flight time, maximum height, farthest point, top speed, and battery voltage at take-off and at the end.
+
+**Incident summary:** drone, log ID, date, duration, maximum altitude and speed, distance, voltages, flight termination and flight modes.
+
+**Critical flight events** are measured from the log:
+- the log ending while the drone is still in the air
+- motors disarmed while the drone was moving, or a crash detected by the flight controller
+- failsafes and flight-controller errors: ArduPilot `ERR` codes and messages, quoted as logged
+- sudden voltage drops, and cell voltage below the limits set in *Settings*
+- GPS fix loss, low satellite count and high HDOP
+- vibration above 60 m/s², and accelerometer clipping
+- abnormal attitude and abnormal descent rate
+- a motor held at full output
+
+Each event links to the replay at that moment. The root cause stays the operator's decision; the report doesn't assign blame. The report is also available as a PDF, and the whole log as a full-rate CSV.
+
+### Live Flight Monitor and Flight Replay
+Both screens use the same satellite map and flight panel.
+
+**Map**
+- Base layers: satellite imagery, a terrain (topographic) map or a street map.
+- Overlays: roads and place names.
+- 3D: the map tilts, terrain elevation and buildings can be turned on, and the path, drop lines and drone model are drawn at their recorded altitude.
+- The map can be rotated, and the camera can chase the drone, follow it, move freely, or show the whole flight.
+
+**Flight panel**
+- Position (copy coordinates, open in Google Maps).
+- An artificial horizon showing roll, pitch and heading.
+- Height, ground speed, battery voltage and current.
+- X/Y/Z vibration bars.
+- Motor outputs, shown only when the drone or log reports them.
+
+**Replay controls**
+- Play, pause and stop; 1×, 2×, 4× or 8× speed; a timeline slider; jump to start or end; and follow drone.
+- Every value shown is the value recorded at that sample. Between samples the last recorded value is held, never interpolated.
+
+**Internet access for the map:** the map tiles come from public servers that the *browser* must be able to reach: Esri World Imagery and World Topo, OpenStreetMap, Mapzen/AWS terrain tiles, and OpenFreeMap buildings. Without internet the map stays dark, but the flight path, markers and instruments still work.
+
 ## Sections
 
 | Section | What it shows |

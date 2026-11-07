@@ -45,7 +45,7 @@ def default_slot(n):
         "telemetry": {"type": "relay", "port": 14600 + n, "host": "", "tcp_port": 5760},
         "video": {"type": "relay_push", "main_url": "", "sub_url": "", "record": False},
         "geofence": {"type": "circle", "radius_m": 1500, "max_alt_m": 120},
-        "battery_cells": 6, "enabled": True, "notes": "",
+        "battery_cells": 6, "enabled": True, "notes": "", "department": "", "customer": "", "location": "",
     }
 
 
@@ -172,7 +172,7 @@ class FleetManager:
         if not cur:
             raise KeyError(slot_no)
         new = dict(cur)
-        for k in ("drone_id", "gcs_id", "msn", "model", "notes", "battery_cells", "enabled"):
+        for k in ("drone_id", "gcs_id", "msn", "model", "notes", "battery_cells", "enabled", "department", "customer", "location"):
             if k in data:
                 new[k] = data[k]
         for k in ("telemetry", "video", "geofence"):

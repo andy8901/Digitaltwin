@@ -26,6 +26,7 @@ export interface HealthComp { name: string; status: 'healthy' | 'warning' | 'cri
 export interface Health { key: string; drone_id: string; gcs_id: string; score: number | null; overall: string; alert_level: Level; components: HealthComp[]; available: number; total: number }
 
 export interface DroneDetail extends Drone {
+  h_acc?: number | null;
   airspeed: number | null; throttle: number | null; mah: number | null; load: number | null;
   ekf: { vel: number; pos_h: number; pos_v: number; compass: number; terrain: number; max: number; flags: number } | null;
   vibe: [number, number, number, number] | null; radio: { rssi: number; remrssi: number; noise: number } | null; rc_rssi: number | null;

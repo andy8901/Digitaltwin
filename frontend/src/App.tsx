@@ -15,6 +15,10 @@ import { History } from './pages/History';
 import { Analytics } from './pages/Analytics';
 import { Settings } from './pages/Settings';
 import { Planner } from './pages/Planner';
+import { Monitor } from './pages/Monitor';
+import { Replay } from './pages/Replay';
+import { FlightReport } from './pages/FlightReport';
+import { OrgOverview } from './pages/OrgOverview';
 
 export const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
@@ -32,7 +36,8 @@ function useRoute() {
 }
 
 const NAV: [string, string, string][] = [
-  ['overview', 'Fleet Overview', 'overview'], ['wall', 'Live Video Wall', 'wall'], ['drone', 'Drone Digital Twin', 'twin'],
+  ['overview', 'Fleet Overview', 'overview'], ['org', 'Organization Overview', 'org'], ['wall', 'Live Video Wall', 'wall'],
+  ['drone', 'Drone Digital Twin', 'twin'], ['monitor', 'Live Flight Monitor', 'monitor'],
   ['map', 'Fleet Map', 'map'], ['alerts', 'Alerts & Notifications', 'alerts'], ['health', 'Fleet Health', 'health'],
   ['gcs', 'GCS Connections', 'gcs'], ['history', 'Flight History', 'history'], ['analytics', 'Analytics & Reports', 'analytics'],
   ['planner', 'Demo Planner', 'planner'], ['settings', 'System Settings', 'settings'],
@@ -134,6 +139,10 @@ export function App() {
   switch (page) {
     case 'wall': body = <VideoWall focus={route[1]} />; break;
     case 'drone': body = <DroneTwin droneKey={route[1]} />; break;
+    case 'monitor': body = <Monitor droneKey={route[1]} />; break;
+    case 'replay': body = <Replay key={route[1]} fid={Number(route[1])} at={route[2] != null ? Number(route[2]) : undefined} />; break;
+    case 'flight': body = <FlightReport fid={Number(route[1])} />; break;
+    case 'org': body = <OrgOverview />; break;
     case 'map': body = <FleetMap />; break;
     case 'alerts': body = <Alerts />; break;
     case 'health': body = <FleetHealth />; break;
@@ -153,7 +162,7 @@ export function App() {
             <span><b>TAVAS</b><small>Digital Twin Command Centre</small></span>
           </button>
           {NAV.map(([k, label, icon]) => (
-            <a key={k} href={`#/${k === 'drone' ? 'drone' : k}`} className={`nav-i ${page === k || (page === '' && k === 'overview') ? 'on' : ''}`} title={label}>
+            <a key={k} href={`#/${k === 'drone' ? 'drone' : k}`} className={`nav-i ${page === k || (page === '' && k === 'overview') || (k === 'history' && (page === 'flight' || page === 'replay')) ? 'on' : ''}`} title={label}>
               <Icon name={icon} size={19} />
               <span>{label}</span>
               {k === 'alerts' && openCount > 0 && <em className={critCount ? 'crit' : ''}>{openCount}</em>}
