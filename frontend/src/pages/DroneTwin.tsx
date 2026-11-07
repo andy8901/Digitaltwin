@@ -1,14 +1,16 @@
-import L from 'leaflet';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ackAlert, can, go, useMe } from '../App';
 import { Battery, Icon, SevChip, SignalBars, ToneChip } from '../components/Bits';
 import { LineChart } from '../components/Chart';
-import { droneIcon, homeIcon, MapBox, TONE_COLOR } from '../components/MapView';
+import { AltLegend, FlightMap2D, fitAll } from '../components/FlightMap2D';
+import { FlightView3D, type CamMode } from '../components/FlightView3D';
 import { TavasModel } from '../components/TavasModel';
+import { TVal } from '../components/Telem';
 import { Video, type VideoStats } from '../components/Video';
 import { api } from '../lib/api';
-import { ago, compass, CONN_LABEL, dur, FIX, flightStatus, fmt, timeOf, tone } from '../lib/format';
+import { ago, compass, CONN_LABEL, dur, FIX, flightStatus, fmt, timeOf } from '../lib/format';
 import { useDetail, useLive } from '../lib/live';
+import { usePaths } from '../lib/paths';
 import type { DroneDetail } from '../lib/types';
 
 const SYS = ['Uninitialised', 'Booting', 'Calibrating', 'Standby', 'Active', 'Critical', 'Emergency', 'Powering off', 'Terminating'];
@@ -22,7 +24,7 @@ function Row({ k, v, unit, warn }: { k: string; v: React.ReactNode; unit?: strin
   );
 }
 
-function Telemetry({ d, rtt }: { d: DroneDetail; rtt: number | null }) {
+function TechDetails({ d, rtt }: { d: DroneDetail; rtt: number | null }) {
   const cells = d.battery_cells || 0;
   const temps = Object.entries(d.temps || {});
   return (
@@ -78,47 +80,6 @@ function Telemetry({ d, rtt }: { d: DroneDetail; rtt: number | null }) {
   );
 }
 
-function TwinMap({ d }: { d: DroneDetail }) {
-  const drones = useLive((s) => s.drones);
-  const refs = useRef<{ map?: L.Map; me?: L.Marker; home?: L.Marker; tko?: L.Marker; trail?: L.Polyline; fence?: L.Circle; others: Record<string, L.Marker>; fid?: number | null; fitted?: boolean }>({ others: {} });
-  const onMap = (m: L.Map) => { refs.current.map = m; };
-  useEffect(() => {
-    const r = refs.current;
-    const m = r.map;
-    if (!m || d.lat == null || d.lon == null) return;
-    const ll: L.LatLngExpression = [d.lat, d.lon];
-    if (!r.me) r.me = L.marker(ll, { icon: droneIcon(d, { selected: true }), zIndexOffset: 1000 }).addTo(m);
-    else { r.me.setLatLng(ll); r.me.setIcon(droneIcon(d, { selected: true })); }
-    if (!r.trail) r.trail = L.polyline([], { color: '#54c8e8', weight: 3 }).addTo(m);
-    if (r.fid !== d.flight_id) {
-      r.fid = d.flight_id;
-      api<{ points: number[][] }>(`/api/drones/${d.key}/trail`).then((t) => r.trail?.setLatLngs(t.points.map((p) => [p[1], p[2]] as [number, number])));
-    } else if (d.airborne) {
-      const pts = r.trail.getLatLngs() as L.LatLng[];
-      const last = pts[pts.length - 1];
-      if (!last || m.distance(last, ll) > 2) r.trail.addLatLng(ll);
-    }
-    if (d.home) { if (!r.home) r.home = L.marker(d.home, { icon: homeIcon('H') }).bindTooltip('Home').addTo(m); else r.home.setLatLng(d.home); }
-    if (d.takeoff) { if (!r.tko) r.tko = L.marker(d.takeoff, { icon: homeIcon('T') }).bindTooltip('Take-off').addTo(m); else r.tko.setLatLng(d.takeoff); }
-    const gf = d.geofence;
-    if (gf && gf.type === 'circle' && gf.radius_m && d.home) {
-      if (!r.fence) r.fence = L.circle(d.home, { radius: gf.radius_m, color: '#f5c242', weight: 1.5, dashArray: '6 6', fill: false }).bindTooltip(`Geofence ${gf.radius_m} m${gf.max_alt_m ? `, ceiling ${gf.max_alt_m} m` : ''}`).addTo(m);
-      else r.fence.setLatLng(d.home).setRadius(gf.radius_m);
-    }
-    if (!r.fitted) { m.setView(ll, 16); r.fitted = true; } else if (!m.getBounds().pad(-0.2).contains(ll)) m.panTo(ll);
-  }, [d]);
-  useEffect(() => {
-    const r = refs.current;
-    if (!r.map) return;
-    for (const o of drones) {
-      if (o.key === d.key || o.lat == null || o.lon == null || o.conn === 'offline') { r.others[o.key]?.remove(); delete r.others[o.key]; continue; }
-      if (!r.others[o.key]) r.others[o.key] = L.marker([o.lat, o.lon], { icon: droneIcon(o, { small: true }), opacity: 0.8 }).on('click', () => go(`drone/${o.key}`)).addTo(r.map);
-      else { r.others[o.key].setLatLng([o.lat, o.lon]); r.others[o.key].setIcon(droneIcon(o, { small: true })); }
-    }
-  }, [drones, d.key]);
-  return <MapBox className="twin-map" onMap={onMap} />;
-}
-
 function Ods({ d }: { d: DroneDetail }) {
   const get = (a: number | string) => d.ods.find((o) => o.a === a);
   const items: [string, { d: number; max: number } | undefined][] = [
@@ -134,6 +95,54 @@ function Ods({ d }: { d: DroneDetail }) {
   );
 }
 
+
+/** Section C: the parameters an operator needs, each with its unit, N/A when not sent, and marked when stale or estimated. */
+function FlightTelemetry({ d, rtt }: { d: DroneDetail; rtt: number | null }) {
+  const cells = d.battery_cells || 0;
+  const bw = d.batt_pct != null && d.batt_pct <= 15 ? 'c' : d.batt_pct != null && d.batt_pct <= 30 ? 'w' : '';
+  const sig = d.rssi ?? d.link_pct;
+  return (
+    <div className="tgrid">
+      <TVal d={d} grp="pos" label="Latitude" value={d.lat != null ? d.lat.toFixed(6) : null} unit="°" />
+      <TVal d={d} grp="pos" label="Longitude" value={d.lon != null ? d.lon.toFixed(6) : null} unit="°" />
+      <TVal d={d} grp="pos" label="Altitude AGL" value={fmt(d.alt, 1)} unit="m" title="Height above the home (take-off) point, from the autopilot" />
+      <TVal d={d} grp="pos" label="Altitude AMSL" value={d.alt_msl != null ? fmt(d.alt_msl, 1) : null} unit="m" />
+      <TVal d={d} grp="hud" label="Ground speed" value={fmt(d.gs, 1)} unit="m/s" />
+      <TVal d={d} grp="pos" label="Heading" value={d.heading != null ? `${fmt(d.heading)}° ${compass(d.heading)}` : null}
+        est={d.heading_src === 'yaw' ? 'from the attitude yaw: the autopilot sent no GPS heading' : false} />
+      <TVal d={d} grp="att" label="Pitch" value={fmt(d.pitch, 1)} unit="°" />
+      <TVal d={d} grp="att" label="Roll" value={fmt(d.roll, 1)} unit="°" />
+      <TVal d={d} grp="att" label="Yaw" value={fmt(d.yaw, 1)} unit="°" />
+      <TVal d={d} grp="hud" label="Vertical speed" value={fmt(d.climb, 1)} unit="m/s" />
+      <TVal d={d} grp="batt" label="Battery" value={d.batt_pct != null ? <><Battery pct={d.batt_pct} /> {d.batt_pct}</> : null} unit="%" warn={bw} />
+      <TVal d={d} grp="batt" label="Battery voltage" value={d.volt != null ? `${fmt(d.volt, 2)}${cells ? ` · ${(d.volt / cells).toFixed(2)}/cell` : ''}` : null} unit="V" />
+      <TVal d={d} grp="gps" label="GPS satellites" value={d.sats} warn={d.sats != null && d.sats < 8 ? 'w' : ''} />
+      <TVal d={d} grp="gps" label="GPS fix" value={d.fix != null ? `${FIX[d.fix] ?? d.fix}${d.hdop != null ? ` · HDOP ${fmt(d.hdop, 1)}` : ''}` : null} warn={d.fix != null && d.fix < 3 ? 'c' : ''} />
+      <TVal d={d} grp="hb" label="Flight mode" value={d.mode || null} />
+      <TVal d={d} label="Flight duration" value={d.flight ? dur(d.flight.time_s) : null} est="counted by the app from arming" />
+      <TVal d={d} grp={d.ages?.radio != null ? 'radio' : 'rc'} label="Signal strength" value={sig != null ? <><SignalBars v={sig} /> {sig}</> : null} unit="%"
+        title={d.rssi != null ? 'Radio RSSI reported by the telemetry radio / receiver' : 'Share of MAVLink packets received'} />
+      <TVal d={d} label="Communication" value={<span className={`conn conn-${d.conn}`}>{CONN_LABEL[d.conn]}{rtt != null ? ` · ${rtt} ms` : ''}</span>} />
+      <TVal d={d} label="Distance travelled" value={d.flight ? fmt(d.flight.distance_m) : null} unit="m" est="summed from received GPS positions" />
+      <TVal d={d} label="Range from home" value={fmt(d.range)} unit="m" est="calculated from GPS position and home" />
+      <TVal d={d} label="Last data received" value={d.last_rx ? `${timeOf(d.last_rx)} · ${ago(d.last_seen_s)}` : null} wide
+        warn={d.conn === 'stale' || d.conn === 'link_lost' ? 'c' : ''} />
+    </div>
+  );
+}
+
+function Collapse({ id, title, extra, children, open: def = false }: { id: string; title: string; extra?: React.ReactNode; children: React.ReactNode; open?: boolean }) {
+  const [open, setOpen] = useState(() => { try { const v = localStorage.getItem(`cc.col.${id}`); return v == null ? def : v === '1'; } catch { return def; } });
+  return (
+    <div className={`col ${open ? 'open' : ''}`}>
+      <button className="col-h" onClick={() => { setOpen(!open); try { localStorage.setItem(`cc.col.${id}`, open ? '0' : '1'); } catch { /* ignore */ } }} aria-expanded={open}>
+        <span className="col-arrow">{open ? '▾' : '▸'}</span><b>{title}</b>{extra}
+      </button>
+      {open && <div className="col-b">{children}</div>}
+    </div>
+  );
+}
+
 export function DroneTwin({ droneKey }: { droneKey?: string }) {
   const drones = useLive((s) => s.drones);
   const key = droneKey && drones.some((x) => x.key === droneKey) ? droneKey : drones[0]?.key || null;
@@ -142,15 +151,27 @@ export function DroneTwin({ droneKey }: { droneKey?: string }) {
   const hist = useLive((s) => (key ? s.history[key] : undefined));
   const gcs = useLive((s) => s.gcs.find((g) => g.key === key));
   const alerts = useLive((s) => s.alerts);
+  const paths = usePaths();
   const me = useMe();
   const [vs, setVs] = useState<VideoStats | null>(null);
+  const [view, setView] = useState<'2d' | '3d'>(() => { try { return (localStorage.getItem('cc.pathview') as '2d' | '3d') || '3d'; } catch { return '3d'; } });
+  const [cam, setCam] = useState<CamMode>('orbit');
+  const [colorBy, setColorBy] = useState<'altitude' | 'drone'>('altitude');
+  const [others, setOthers] = useState(true);
+  const [fitK, setFitK] = useState(0);
   const [chase, setChase] = useState(false);
   const [past, setPast] = useState<{ ts: number; alt: number | null; batt_pct: number | null; volt: number | null; gs: number | null; link: number | null }[]>([]);
   const vbox = useRef<HTMLDivElement>(null);
+  useEffect(() => { try { localStorage.setItem('cc.pathview', view); } catch { /* ignore */ } }, [view]);
   useEffect(() => {
     setPast([]);
     if (key) api<typeof past>(`/api/drones/${key}/telemetry?minutes=10`).then(setPast).catch(() => undefined);
   }, [key]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.fullscreenElement) go('overview'); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const series = useMemo(() => {
     const live = hist || [];
     const cut = live.length ? live[0].t : Infinity;
@@ -168,104 +189,139 @@ export function DroneTwin({ droneKey }: { droneKey?: string }) {
   }, [hist, past]);
   if (!key) return <div className="empty">No drones registered.</div>;
   if (!d) return <div className="empty">Loading {key}…</div>;
+  const idx = drones.findIndex((x) => x.key === d.key);
+  const prev = drones[(idx - 1 + drones.length) % drones.length], next = drones[(idx + 1) % drones.length];
   const mine = alerts.filter((a) => a.drone_key === d.key);
   const live = d.conn !== 'offline';
   const motorWarn = d.esc.length ? d.motors.map((_, i) => { const e = d.esc.find((x) => x.i === i); return !!e && (e.temp >= 60 || (d.airborne && e.rpm === 0)); }) : undefined;
   const full = () => { const el = vbox.current?.querySelector('.video') as HTMLElement | null; el?.requestFullscreen?.().catch(() => undefined); };
+  const p = paths[d.key];
+  const batt = d.health?.components.find((c) => c.name === 'Battery');
+  const comm = d.health?.components.find((c) => c.name === 'Communication link');
   return (
-    <div className="twin-page">
-      <div className="page-bar twin-bar">
-        <select value={d.key} onChange={(e) => go(`drone/${e.target.value}`)} aria-label="Drone">
-          {drones.map((x) => <option key={x.key} value={x.key}>{x.drone_id} · {x.gcs_id}</option>)}
-        </select>
-        <h1>{d.drone_id}</h1>
-        <span className="muted">{d.gcs_id} · {d.model}{d.msn && d.msn !== d.drone_id ? ` · MSN ${d.msn}` : ''}</span>
+    <div className="dt-page">
+      <div className="dt-head">
+        <button className="btn back" onClick={() => go('overview')} title="Back to the fleet dashboard (Esc)"><span aria-hidden>←</span> Fleet</button>
+        <div className="dt-nav">
+          <button className="btn ghost sm" onClick={() => go(`drone/${prev.key}`)} aria-label={`Previous: ${prev.drone_id}`}>‹</button>
+          <select value={d.key} onChange={(e) => go(`drone/${e.target.value}`)} aria-label="Drone">
+            {drones.map((x) => <option key={x.key} value={x.key}>{x.drone_id} · {x.gcs_id}</option>)}
+          </select>
+          <button className="btn ghost sm" onClick={() => go(`drone/${next.key}`)} aria-label={`Next: ${next.drone_id}`}>›</button>
+        </div>
+        <h1 className="dt-id">{d.drone_id}</h1>
+        <span className="muted">{d.gcs_id}</span>
         <ToneChip d={d} />
+        {d.simulated ? <span className="data-badge sim" title="Data comes from the simulator, not a real drone">SIMULATION</span>
+          : d.conn === 'offline' ? <span className="data-badge none" title="Nothing is being received from this drone's GCS">NO LIVE DATA</span>
+            : <span className="data-badge real" title="Telemetry received live from the drone's GCS">REAL-TIME</span>}
         <span className="bar-stat">{flightStatus(d)}</span>
-        <span className="bar-stat"><span className="muted">Mode</span> <b>{d.mode || '—'}</b></span>
+        <span className="bar-stat"><span className="muted">Mode</span> <b>{d.mode || 'N/A'}</b></span>
         <span className="bar-stat"><span className="muted">Flight</span> <b className="num">{d.flight ? dur(d.flight.time_s) : '—'}</b></span>
-        <span className="bar-stat"><Battery pct={d.batt_pct} /> <b className="num">{fmt(d.batt_pct)}%</b></span>
-        <span className="bar-stat"><SignalBars v={live ? d.rssi ?? d.link_pct : null} /> <span className={`conn conn-${d.conn}`}>{CONN_LABEL[d.conn]}</span></span>
         <span className="spacer" />
-        <button className="btn ghost" onClick={() => go(`wall/${d.key}`)}><Icon name="wall" /> Video wall</button>
-        <button className="btn ghost" onClick={() => go(`history/${d.key}`)}><Icon name="history" /> Flight history</button>
+        <span className={`bar-stat last-rx ${d.conn === 'stale' || d.conn === 'link_lost' ? 'bad' : ''}`}><span className="muted">Last data</span> <b className="num">{d.last_rx ? timeOf(d.last_rx) : 'never'}</b></span>
+        <button className="btn ghost" onClick={() => go(`history/${d.key}`)}><Icon name="history" /> History</button>
       </div>
-      <div className="twin-grid">
-        <section className="panel p-video" ref={vbox}>
-          <Video path={d.video.path} enabled={live && d.video.ready} pauseWhenHidden={false} onStats={setVs}
-            offMessage={!live ? 'Drone offline' : !d.video.configured ? 'No video source configured' : 'No video stream'} className="main-video">
+      <div className="dt-grid">
+        {/* A: live camera */}
+        <section className="panel dt-a" ref={vbox}>
+          <Video path={d.video.path} enabled={live && d.video.ready} pauseWhenHidden={false} onStats={setVs} simulated={d.simulated}
+            offMessage={!live ? 'Drone offline' : !d.video.configured ? 'No video source configured for this GCS' : 'No stream from the camera'} className="main-video">
             <div className="vo vo-tl"><b>{d.drone_id}</b> <span className="muted">{d.gcs_id}</span></div>
-            <div className="vo vo-tr num">{timeOf(t)}{d.video.recording && <span className="rec">REC</span>}</div>
-            <div className="vo vo-bl num">{fmt(d.alt, 0)} m · {fmt(d.gs, 1)} m/s · {d.heading != null ? `${fmt(d.heading)}° ${compass(d.heading)}` : '—'}</div>
+            <div className="vo vo-tr num">{timeOf(t)} {vs?.latencyMs != null && <span className="muted">· {vs.latencyMs} ms</span>}{d.video.recording && <span className="rec">REC</span>}</div>
+            <div className="vo vo-bl num">{d.alt != null ? `${fmt(d.alt, 0)} m` : 'alt N/A'} · {d.gs != null ? `${fmt(d.gs, 1)} m/s` : 'speed N/A'} · {d.heading != null ? `${fmt(d.heading)}° ${compass(d.heading)}` : 'hdg N/A'}</div>
           </Video>
           <div className="video-meta">
-            <span>Video <b className={vs?.state === 'playing' ? 'ok' : 'bad'}>{vs?.state === 'playing' ? 'connected' : vs?.state === 'off' ? 'off' : vs?.message || 'connecting'}</b></span>
-            <span>Latency <b className="num">{vs?.latencyMs != null ? `~${vs.latencyMs} ms` : 'n/a'}</b></span>
-            <span>Stream <b className="num">{vs?.height ? `${vs.width}×${vs.height}` : 'n/a'}{vs?.fps ? ` · ${vs.fps} fps` : ''}{vs?.kbps ? ` · ${vs.kbps} kbit/s` : ''}</b></span>
+            <span>Video <b className={vs?.state === 'playing' ? 'ok' : 'bad'}>{vs?.state === 'playing' ? 'connected' : vs?.state === 'connecting' ? 'connecting' : 'offline'}</b></span>
+            <span>Latency <b className="num">{vs?.latencyMs != null ? `~${vs.latencyMs} ms` : 'N/A'}</b></span>
+            <span>Stream <b className="num">{vs?.height ? `${vs.width}×${vs.height}` : 'N/A'}{vs?.fps ? ` · ${vs.fps} fps` : ''}{vs?.kbps ? ` · ${vs.kbps} kbit/s` : ''}</b></span>
             <span>Recording <b>{d.video.recording ? 'on' : 'off'}</b></span>
-            <span>Telemetry <b className="num">{timeOf(t)}</b></span>
             <button className="btn sm ghost" onClick={full}><Icon name="expand" size={15} /> Full screen</button>
           </div>
         </section>
-        <section className="panel p-3d">
-          <div className="panel-h"><h2>3D digital twin</h2><span className="muted">drag to rotate · scroll to zoom</span>
-            <span className="spacer" /><label className="tgl"><input type="checkbox" checked={chase} onChange={(e) => setChase(e.target.checked)} /> Follow heading</label></div>
-          <TavasModel pose={{ roll: d.roll, pitch: d.pitch, yaw: d.yaw, heading: d.heading, gs: d.gs, climb: d.climb, armed: d.armed, airborne: d.airborne, motors: d.motors, motorWarn }} chase={chase} />
-          <div className="hud">
-            <span>Pitch <b className="num">{fmt(d.pitch, 1)}°</b></span>
-            <span>Roll <b className="num">{fmt(d.roll, 1)}°</b></span>
-            <span>Yaw <b className="num">{fmt(d.yaw, 0)}°</b></span>
-            <span>Heading <b className="num">{fmt(d.heading)}° {compass(d.heading)}</b></span>
-            <span>Altitude <b className="num">{fmt(d.alt, 1)} m</b></span>
-            <span>Moving <b className="num">{d.gs != null && d.gs > 0.3 ? `${fmt(d.gs, 1)} m/s` : 'hovering'}{d.climb != null && Math.abs(d.climb) > 0.3 ? `, ${d.climb > 0 ? 'climbing' : 'descending'} ${fmt(Math.abs(d.climb), 1)}` : ''}</b></span>
-            <span>Status <b>{flightStatus(d)}</b></span>
-            <span>Motors <b className={d.motors.some((m) => m >= 1900) && d.armed ? 'bad' : ''}>{d.motors.length ? (d.armed ? d.motors.join(' / ') : 'stopped') : 'n/a'}</b></span>
+        {/* B: flight path */}
+        <section className="panel dt-b">
+          <div className="panel-h">
+            <h2>Flight path</h2>
+            <div className="seg"><button className={view === '3d' ? 'on' : ''} onClick={() => setView('3d')}>3D</button><button className={view === '2d' ? 'on' : ''} onClick={() => setView('2d')}>2D map</button></div>
+            {view === '3d' ? <div className="seg">{(['orbit', 'chase', 'top'] as const).map((c) => <button key={c} className={cam === c ? 'on' : ''} onClick={() => setCam(c)}>{c === 'orbit' ? 'Free' : c === 'chase' ? 'Chase' : 'Top'}</button>)}</div>
+              : <div className="seg"><button className={colorBy === 'altitude' ? 'on' : ''} onClick={() => setColorBy('altitude')}>Altitude colours</button><button className={colorBy === 'drone' ? 'on' : ''} onClick={() => setColorBy('drone')}>Plain</button></div>}
+            <label className="tgl"><input type="checkbox" checked={others} onChange={(e) => setOthers(e.target.checked)} /> Other drones</label>
+            {view === '2d' && <button className="btn sm ghost" onClick={() => setFitK(fitAll())}>Fit</button>}
           </div>
-          <Ods d={d} />
-        </section>
-        <section className="panel p-tele"><div className="panel-h"><h2>Telemetry</h2><span className="muted">n/a: not sent by this drone</span></div><Telemetry d={d} rtt={gcs?.rtt_ms ?? null} /></section>
-        <section className="panel p-map"><div className="panel-h"><h2>Map</h2><span className="muted">current · home H · take-off T · trajectory · geofence · other drones</span></div><TwinMap d={d} /></section>
-        <section className="panel p-charts">
-          <div className="panel-h"><h2>Last 10 minutes</h2></div>
-          <div className="charts">
-            <div><span className="ch-k">Battery <b className="num">{fmt(d.batt_pct)}%</b></span><LineChart t={series.t} series={[{ values: series.batt, color: '#3ddc84' }]} min={0} max={100} unit="%" /></div>
-            <div><span className="ch-k">Voltage <b className="num">{fmt(d.volt, 2)} V</b></span><LineChart t={series.t} series={[{ values: series.volt, color: '#7be0b0' }]} /></div>
-            <div><span className="ch-k">Altitude <b className="num">{fmt(d.alt, 1)} m</b></span><LineChart t={series.t} series={[{ values: series.alt, color: '#54c8e8' }]} min={0} /></div>
-            <div><span className="ch-k">Ground speed <b className="num">{fmt(d.gs, 1)} m/s</b></span><LineChart t={series.t} series={[{ values: series.gs, color: '#3b8cff' }]} min={0} /></div>
-            <div><span className="ch-k">Signal <b className="num">{fmt(d.rssi)}% RSSI · {fmt(d.link_pct)}% packets</b></span><LineChart t={series.t} series={[{ values: series.rssi, color: '#f5c242' }, { values: series.link, color: '#c9a6ff' }]} min={0} max={100} unit="%" /></div>
+          <div className="dt-path">
+            {view === '3d'
+              ? <FlightView3D drones={drones} focusKey={d.key} cam={cam} showOthers={others} />
+              : <FlightMap2D drones={drones} paths={paths} focusKey={d.key} colorBy={colorBy} showOthers={others} follow onSelect={(k) => k !== d.key && go(`drone/${k}`)} className="dt-map" fitKey={`${d.key}:${fitK}`} />}
+            <AltLegend />
+            {(d.lat == null || d.conn === 'offline') && <div className="path-nodata">{d.lat == null ? 'NO POSITION DATA FROM THIS DRONE' : `NO LIVE POSITION · last known ${d.last_seen_s != null ? ago(d.last_seen_s) : ''}`}</div>}
+            {d.simulated && <div className="sim-badge path">SIMULATION</div>}
+          </div>
+          <div className="path-stats">
+            <span>Altitude <b className="num">{d.alt != null ? `${fmt(d.alt, 1)} m` : 'N/A'}</b></span>
+            <span>Speed <b className="num">{d.gs != null ? `${fmt(d.gs, 1)} m/s` : 'N/A'}</b></span>
+            <span>Travelled <b className="num">{d.flight ? `${fmt(d.flight.distance_m)} m` : 'N/A'}</b> <em className="est">est.</em></span>
+            <span>From home <b className="num">{d.range != null ? `${fmt(d.range)} m` : 'N/A'}</b></span>
+            <span>Mission <b className="num">{d.mission_items?.length ? `${Math.max(0, d.mission_items.findIndex((i) => d.mission?.seq != null && i.seq >= d.mission.seq) + 1) || d.mission_items.length} / ${d.mission_items.length}` : 'not received'}</b></span>
+            <span className="muted small">{p?.pts.length ? `${p.pts.length} track points from telemetry` : 'No track yet: the path starts when the drone arms'}</span>
           </div>
         </section>
-        <section className="panel p-alerts">
-          <div className="panel-h"><h2>Alerts</h2><span className="muted">{mine.length} open</span></div>
+        {/* C: flight telemetry */}
+        <section className="panel dt-c">
+          <div className="panel-h"><h2>Flight telemetry</h2><span className="muted small">N/A = not sent by this drone · <em className="est">est.</em> = calculated by the app · dimmed = stale</span></div>
+          <FlightTelemetry d={d} rtt={gcs?.rtt_ms ?? null} />
+          <Collapse id="tech" title="All technical values"><TechDetails d={d} rtt={gcs?.rtt_ms ?? null} /></Collapse>
+        </section>
+        {/* D: alerts & system health */}
+        <section className="panel dt-d">
+          <div className="panel-h"><h2>Alerts & system health</h2>{d.health?.score != null && <b className={`score s-${d.health.overall}`} title="Health score from the components this drone reports">{d.health.score}</b>}</div>
           <div className="mini-alerts">
             {mine.length ? mine.map((a) => (
               <div key={a.id} className={`ma sev-${a.severity}`}>
                 <SevChip s={a.severity} /><b>{a.label}</b><span className="num muted">{timeOf(a.ts)}</span>
-                <div className="ma-m">{a.message} <span className="muted">· {a.source}</span></div>
+                <div className="ma-m">{a.message} <span className="muted">· {a.source}{a.param ? ` · ${a.param}` : ''}</span></div>
                 {!a.ack_ts && can(me, 'operator') && <button className="btn sm" onClick={() => ackAlert(a)}>Acknowledge</button>}
                 {a.ack_ts && <span className="muted">Acknowledged by {a.ack_by}</span>}
               </div>
-            )) : <p className="muted">No open alerts for this drone.</p>}
+            )) : <p className="ok-line">No active errors or warnings.</p>}
           </div>
-          <h3 className="sub-h">Flight controller messages</h3>
-          <div className="msgs">
-            {[...d.msgs].reverse().map((m, i) => <div key={i} className={`msg s${m.sev}`}><span className="num">{timeOf(m.ts)}</span><span>{m.text}</span></div>)}
-            {!d.msgs.length && <p className="muted">No messages yet.</p>}
+          <div className="dt-health">
+            <div className={`hc hc-${batt?.status ?? 'unavailable'}`}><i /><b>Battery</b><span>{batt?.detail ?? 'N/A'}</span></div>
+            <div className={`hc hc-${comm?.status ?? 'unavailable'}`}><i /><b>Communication</b><span>{comm?.detail ?? CONN_LABEL[d.conn]}{gcs ? ` · GCS ${gcs.state}` : ''}</span></div>
           </div>
-        </section>
-        <section className="panel p-health">
-          <div className="panel-h"><h2>Health</h2>{d.health?.score != null && <b className={`score s-${d.health.overall}`}>{d.health.score}</b>}</div>
-          {d.health ? d.health.components.map((c) => (
-            <div key={c.name} className={`hc hc-${c.status}`}><i /><b>{c.name}</b><span>{c.detail}</span></div>
-          )) : <p className="muted">Collecting…</p>}
-          {d.flight && d.flight.events.length > 0 && <>
-            <h3 className="sub-h">This flight</h3>
-            {d.flight.events.slice(-8).map((e, i) => <div key={i} className="ev"><span className="num">{dur(e.t)}</span><span>{e.text}</span></div>)}
-          </>}
-          {d.prearm.length > 0 && !d.armed && <><h3 className="sub-h">Pre-arm checks</h3>{d.prearm.map((p, i) => <div key={i} className="ev warn">{p}</div>)}</>}
+          <Collapse id="health" title="Component health" extra={d.health ? <span className="muted small">{d.health.available} of {d.health.total} reporting</span> : null}>
+            {d.health ? d.health.components.map((c) => <div key={c.name} className={`hc hc-${c.status}`}><i /><b>{c.name}</b><span>{c.detail}</span></div>) : <p className="muted">Collecting…</p>}
+            {d.prearm.length > 0 && !d.armed && <><h3 className="sub-h">Pre-arm checks</h3>{d.prearm.map((x, i) => <div key={i} className="ev warn">{x}</div>)}</>}
+          </Collapse>
+          <Collapse id="att" title="Attitude & motors (3D model)">
+            <TavasModel pose={{ roll: d.roll, pitch: d.pitch, yaw: d.yaw, heading: d.heading, gs: d.gs, climb: d.climb, armed: d.armed, airborne: d.airborne, motors: d.motors, motorWarn }} chase={chase} />
+            <label className="tgl"><input type="checkbox" checked={chase} onChange={(e) => setChase(e.target.checked)} /> Follow heading</label>
+            <div className="hud">
+              <span>Motors <b className={d.motors.some((m) => m >= 1900) && d.armed ? 'bad' : ''}>{d.motors.length ? (d.armed ? d.motors.join(' / ') : 'stopped') : 'N/A'}</b></span>
+            </div>
+            <Ods d={d} />
+          </Collapse>
+          <Collapse id="charts" title="Charts (last 10 minutes)">
+            <div className="charts">
+              <div><span className="ch-k">Battery <b className="num">{fmt(d.batt_pct)}%</b></span><LineChart t={series.t} series={[{ values: series.batt, color: '#3ddc84' }]} min={0} max={100} unit="%" /></div>
+              <div><span className="ch-k">Altitude <b className="num">{fmt(d.alt, 1)} m</b></span><LineChart t={series.t} series={[{ values: series.alt, color: '#54c8e8' }]} min={0} /></div>
+              <div><span className="ch-k">Ground speed <b className="num">{fmt(d.gs, 1)} m/s</b></span><LineChart t={series.t} series={[{ values: series.gs, color: '#3b8cff' }]} min={0} /></div>
+              <div><span className="ch-k">Signal <b className="num">{fmt(d.rssi)}% RSSI · {fmt(d.link_pct)}% packets</b></span><LineChart t={series.t} series={[{ values: series.rssi, color: '#f5c242' }, { values: series.link, color: '#c9a6ff' }]} min={0} max={100} unit="%" /></div>
+            </div>
+          </Collapse>
+          <Collapse id="msgs" title="Flight-controller messages" extra={<span className="muted small">{d.msgs.length}</span>}>
+            <div className="msgs">
+              {[...d.msgs].reverse().map((m, i) => <div key={i} className={`msg s${m.sev}`}><span className="num">{timeOf(m.ts)}</span><span>{m.text}</span></div>)}
+              {!d.msgs.length && <p className="muted">No messages yet.</p>}
+            </div>
+          </Collapse>
+          {d.flight && d.flight.events.length > 0 && (
+            <Collapse id="events" title="Events this flight" extra={<span className="muted small">{d.flight.events.length}</span>}>
+              {d.flight.events.slice(-12).map((e, i) => <div key={i} className="ev"><span className="num">{dur(e.t)}</span><span>{e.text}</span></div>)}
+            </Collapse>
+          )}
         </section>
       </div>
-      <p className="tone-key muted"><i style={{ background: TONE_COLOR[tone(d)] }} /> Status colours: green normal, blue airborne, yellow warning, red critical, grey offline.</p>
     </div>
   );
 }

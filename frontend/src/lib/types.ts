@@ -13,16 +13,20 @@ export interface Drone {
   batt_pct: number | null; volt: number | null; curr: number | null; fix: number | null; sats: number | null; hdop: number | null;
   link_pct: number | null; rssi: number | null; home: [number, number] | null; takeoff: [number, number] | null; range: number | null;
   flight_s: number | null; flight_id: number | null;
+  dist_m: number | null; roll: number | null; pitch: number | null; yaw: number | null; heading_src: 'gps' | 'yaw' | null; vz: number | null; track: number | null;
+  ages: Partial<Record<'pos' | 'att' | 'gps' | 'batt' | 'hud' | 'radio' | 'rc' | 'hb', number>>; last_rx: number | null;
+  simulated: boolean; mission_ver: number; mission_seq: number | null;
   level: Level; alerts: { critical: number; warning: number }; video: VideoInfo; gcs_state: string | null;
 }
 
+export interface MissionItem { seq: number; cmd: number; kind: string; lat: number; lon: number; alt: number; alt_ref: 'home' | 'amsl' }
 export interface Msg { ts: number; sev: number; text: string; fc?: boolean }
 export interface FlightEvent { type: string; t: number; text: string; dist_m: number | null; alt_m: number | null; voltage: number | null; lat: number | null; lon: number | null }
 export interface HealthComp { name: string; status: 'healthy' | 'warning' | 'critical' | 'unavailable'; detail: string; value?: number | null }
 export interface Health { key: string; drone_id: string; gcs_id: string; score: number | null; overall: string; alert_level: Level; components: HealthComp[]; available: number; total: number }
 
 export interface DroneDetail extends Drone {
-  roll: number | null; pitch: number | null; yaw: number | null; airspeed: number | null; throttle: number | null; mah: number | null; load: number | null;
+  airspeed: number | null; throttle: number | null; mah: number | null; load: number | null;
   ekf: { vel: number; pos_h: number; pos_v: number; compass: number; terrain: number; max: number; flags: number } | null;
   vibe: [number, number, number, number] | null; radio: { rssi: number; remrssi: number; noise: number } | null; rc_rssi: number | null;
   motors: number[]; esc: { i: number; rpm: number; temp: number; current: number; voltage: number }[]; temps: Record<string, number>;
@@ -32,6 +36,7 @@ export interface DroneDetail extends Drone {
   fence: { breach: boolean; count: number; type: number } | null; boot_s: number | null;
   flight: { id: number; time_s: number; distance_m: number; max_range: number; max_alt: number; max_speed: number; cold_start_s: number | null; events: FlightEvent[]; prearm: string[] } | null;
   prearm: string[]; msgs: Msg[]; health?: Health;
+  mission_items: MissionItem[];
   battery_cells?: number; geofence?: { type: string; radius_m?: number; max_alt_m?: number | null; lat?: number; lon?: number } | null;
 }
 

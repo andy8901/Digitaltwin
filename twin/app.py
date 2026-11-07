@@ -219,9 +219,20 @@ def api_trail(key: str, request: Request):
     if not d:
         raise HTTPException(404)
     if d.flight:
-        return {"flight_id": d.flight.id, "live": True, "points": list(d.trail)}
+        return {"flight_id": d.flight.id, "live": True, "points": list(d.trail), "simulated": d.simulated}
     fid = d.last_flight_id or next((f["id"] for f in store.flights(drone_key=key, limit=1)), None)
     return {"flight_id": fid, "live": False, "points": store.track(fid) if fid else []}
+
+
+@app.get("/api/fleet/paths")
+def api_fleet_paths(request: Request):
+    """Flight path of every drone: the live flight's points (or none), the planned route heard on its GCS link."""
+    user(request)
+    out = {}
+    for d in hub.ordered():
+        out[d.key] = {"live": bool(d.flight), "points": list(d.trail) if d.flight else [], "simulated": d.simulated,
+                      "mission": d.mission_items, "mission_ver": d.mission_ver}
+    return out
 
 
 @app.get("/api/drones/{key}/telemetry")
@@ -647,6 +658,7 @@ async def ws_ingest(ws: WebSocket):
     gcs = (q.get("gcs") or "").strip()
     msn = (q.get("msn") or "").strip()[:40] or None
     model = (q.get("model") or "").strip()[:40] or None
+    simulated = q.get("mode") == "simulation"   # the simulator and log replays say so; field relays never do
     slot = fleet.slot_by_gcs(gcs) if gcs else fleet.slot_by_msn(msn)
     if gcs and not slot:
         await ws.close(code=4404)
@@ -676,7 +688,7 @@ async def ws_ingest(ws: WebSocket):
                 break
             data = m.get("bytes")
             if data:
-                n = hub.feed(source, data, msn, model, slot=slot)
+                n = hub.feed(source, data, msn, model, slot=slot, simulated=simulated)
                 if link:
                     link.data(len(data), n)
             elif m.get("text") and link and m["text"].startswith("pong "):
