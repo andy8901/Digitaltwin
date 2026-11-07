@@ -6,14 +6,49 @@ One control-room application that watches **15 TAVAS drones at once**. Each dron
 
 **Monitoring only.** The command centre never sends commands to a drone and never writes to a GCS. Any future command interface would have to be built and safety-validated separately.
 
+## What the operator sees first
+
+The **Fleet Overview** is the main screen. It shows four things together, with no page changes needed:
+
+1. all 15 live camera feeds, each with its status, battery, altitude, speed and signal;
+2. the fleet's flight paths (2D map or 3D) with each drone's own path colour;
+3. the alerts that need attention, critical first;
+4. the fleet totals in the top bar.
+
+Click any tile, path or alert to open that drone; **← Fleet** (or Esc) goes back.
+
+The drone screen is split into four parts:
+
+- **A – Live camera:** the full-resolution feed with drone ID, time, measured latency and full screen. When there is no stream it says **VIDEO OFFLINE**; it never shows substitute footage.
+- **B – Flight path:**
+  - **3D:** a SITL/GCS-style scene in metres around home. It shows the received GPS track coloured by altitude, with drop lines to the ground, and the drone model posed from the autopilot's pitch, roll and yaw. It also shows the movement vector, home (H), take-off (T), the planned mission (flown part grey, remaining part dashed) and the other drones at their true relative positions. Camera modes: free orbit, chase or top-down. The drone models are drawn larger than life so they stay visible.
+  - **2D:** the same information on the map.
+- **C – Flight telemetry:**
+  - Every value has its unit.
+  - **N/A** means the drone didn't send it.
+  - A value is dimmed and struck through when it stops arriving.
+  - Values the app calculates instead of receiving (distance travelled, range from home, flight time, or heading taken from yaw) are tagged **est.**
+  - The time of the last data received is always shown.
+- **D – Alerts & system health:** active alerts, battery and communication health. Component health, the attitude model, charts, flight-controller messages and flight events are in sections you can expand.
+
+### Real data and simulation
+
+- Flight paths are drawn only from positions the server received. A telemetry gap breaks the line; nothing is interpolated or invented.
+- The planned route is shown only when the mission was heard on the GCS link (MISSION_COUNT / MISSION_ITEM_INT, when the GCS reads or writes the mission).
+- A drone fed by the simulator or a log replay is marked **SIMULATION**:
+  - a banner across the app
+  - a badge on its camera feed, flight path and drone screen
+- A drone fed by a field relay or a MAVLink adapter is shown as **REAL-TIME**.
+- A drone with nothing arriving is shown as **NO LIVE DATA**.
+
 ## Sections
 
 | Section | What it shows |
 |---|---|
-| **Fleet Overview** | 5 × 3 tiles, one per drone: live video, status, battery, altitude, ground speed, GPS, signal, mode, flight time, link and a warning badge. Tile colour: green normal, blue airborne, yellow warning, red critical, grey offline. The top bar counts total / airborne / on ground / warnings / critical / disconnected, average battery and the fleet's flight time today. |
+| **Fleet Overview** | The main screen: 15 camera tiles (status colour green normal, blue airborne, yellow warning, red critical, grey offline; battery, altitude, speed, signal), the fleet flight paths in 2D or 3D, and the alert list. The top bar counts total / airborne / on ground / warnings / critical / disconnected, average battery and the fleet's flight time today. |
 | **Live Video Wall** | All 15 feeds in a 5 × 3 grid, each independent (one feed failing never stops the others). Click a feed to enlarge it, open its digital twin, go full screen, or go back to the grid. Unavailable feeds are marked. The wall uses each camera's low-bitrate sub-stream when one is set up, and feeds scrolled off screen pause. |
-| **Drone Digital Twin** | One drone in detail: full-screen video with ID, timestamp, recording and measured latency; a 3D model of the TAVAS that follows pitch, roll and yaw (drag to rotate, scroll to zoom) with motor outputs and direction of travel; every telemetry value; battery / voltage / altitude / speed / signal charts; a map with position, home, take-off point, trajectory, geofence and the other drones; open alerts, flight-controller messages, component health and obstacle-sensor (ODS) distances. |
-| **Fleet Map** | All drones on one map with their trajectories, homes and geofences. |
+| **Drone Digital Twin** | One drone in four parts: A live camera, B flight path (3D or 2D), C flight telemetry, D alerts & system health (see above). |
+| **Fleet Map** | All drones with their live tracks, each in its own colour, in 2D or 3D; click a drone to open it. |
 | **Alerts & Notifications** | Open and past alerts with drone, GCS, message, severity, time, position, the parameter that triggered it, its source and acknowledgement. Critical alerts flash in a banner until someone acknowledges them. Clicking an alert opens that drone. |
 | **Fleet Health** | A score per drone from the components it actually reports (battery, motors, ESC, GPS, flight controller, link, camera, sensors, temperature). Components without data are shown as "no data" and left out of the score. |
 | **GCS Connections** | Each GCS's adapter, connection state, last data, telemetry round-trip, data rate, link quality, video stream and 24-hour disconnection history. |
@@ -68,7 +103,13 @@ TWIN_INGEST_TOKEN=tok TWIN_VIDEO_PUBLISH_PASS=vpub uvicorn twin.app:app --port 8
 python tools/fleet_sim.py --server ws://127.0.0.1:8080 --token tok --video rtsp://relay:vpub@127.0.0.1:8554
 ```
 
-The simulator opens 15 separate GCS connections and 15 camera streams (test patterns labelled "SIMULATED CAMERA"). Each drone takes off, flies a patrol and returns. Some slots play scenarios so every alert path can be seen: 03 low battery, 05 fast discharge, 06 GPS degradation, 08 stays on the ground, 09 telemetry drop, 11 compass inconsistency, 13 motor failure, 14 video drop, 15 never connects. Use `--no-faults` for a clean fleet.
+The simulator opens 15 separate GCS connections and 15 camera streams (test patterns labelled "SIMULATED CAMERA"). Each drone takes off, flies a patrol and returns. Some slots play scenarios so every alert path can be seen: 03 low battery, 05 fast discharge, 06 GPS degradation, 08 stays on the ground, 09 telemetry drop, 11 compass inconsistency, 13 motor failure, 14 video drop, 15 never connects. Use `--no-faults` for a clean fleet. The simulated GCS links also send the mission (as a GCS does when it reads it from the autopilot), so the planned route shows.
+
+The test-pattern cameras say "SIMULATED CAMERA". To try the video wall with real-looking footage, point `--footage` at a folder of your own TAVAS camera recordings (mp4/mov/mkv). Each drone loops one clip, which is labelled *SIMULATION – sample footage*:
+
+```bash
+python tools/fleet_sim.py ... --footage /path/to/tavas_recordings
+```
 
 ## Web interface source
 

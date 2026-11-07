@@ -110,6 +110,17 @@ class SimDrone:
         k = self.rng.choice([4, 5, 6])
         self.wps = [offset(*self.home, r * math.cos(math.radians(start + i * 360 / k)), r * math.sin(math.radians(start + i * 360 / k))) for i in range(k)]
         self.wp_i = 0
+        self.mission_sent = 0.0   # the GCS downloads the mission right after it is planned
+
+    def mission_packets(self):
+        """What a GCS link carries when the GCS reads the mission from the autopilot (MISSION_COUNT + items)."""
+        m = self.mav
+        items = [(16, 0, self.home[0], self.home[1], 0), (22, 3, 0, 0, self.cruise_alt)]
+        items += [(16, 3, la, lo, self.cruise_alt) for la, lo in self.wps]
+        items.append((20, 3, 0, 0, 0))
+        m.send(m.mission_count_encode(255, 190, len(items), 0))
+        for i, (cmd, frame, la, lo, z) in enumerate(items):
+            m.send(m.mission_item_int_encode(255, 190, i, frame, cmd, 0, 1, 0, 0, 0, 0, int(la * 1e7), int(lo * 1e7), z, 0))
 
     def step(self, dt, now):
         el = now - self.t0
@@ -291,6 +302,9 @@ class SimDrone:
             m.send(m.rc_channels_encode(ms, 8, *([1500] * 18), rssi))
         if self.due("home", 0.2, now):
             m.send(m.home_position_encode(int(self.home[0] * 1e7), int(self.home[1] * 1e7), 900000, 0, 0, 0, [1, 0, 0, 0], 0, 0, 0))
+        if self.wps and now - getattr(self, "mission_sent", 0) > 30:
+            self.mission_sent = now
+            self.mission_packets()
         if self.due("mis", 1, now) and self.wps:
             m.send(m.mission_current_encode(self.wp_i + 1, total=len(self.wps) + 1))
         if self.due("ods", 2, now):
@@ -319,7 +333,7 @@ async def run_gcs(args, drone):
     import websockets
     if drone.scn == "offline":
         return
-    url = f"{args.server.rstrip('/')}/ws/ingest?token={args.token}&gcs=GCS-{drone.n:02d}"
+    url = f"{args.server.rstrip('/')}/ws/ingest?token={args.token}&gcs=GCS-{drone.n:02d}&mode=simulation"
     last = time.time()
     dropped = False
     while True:
@@ -357,6 +371,36 @@ async def run_gcs(args, drone):
 
 
 # ---------------------------------------------------------------- simulated cameras
+def footage_clips(src, folder, n_drones, codec):
+    """Sample footage (e.g. your own recordings from a TAVAS camera) looped per drone, labelled SIMULATION."""
+    ff = shutil.which("ffmpeg")
+    files = sorted(p for p in Path(src).iterdir() if p.suffix.lower() in (".mp4", ".mov", ".mkv", ".avi", ".ts"))
+    if not files:
+        sys.exit(f"no video files in {src}")
+    folder.mkdir(parents=True, exist_ok=True)
+    font = next((f for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf",
+                             "/System/Library/Fonts/Supplemental/Arial Bold.ttf") if os.path.exists(f)), None)
+    enc = (["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "{br}", "-g", "25"] if codec == "vp8" else
+           ["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-b:v", "{br}", "-g", "25", "-bf", "0"])
+    clips = {}
+    for n in range(1, n_drones + 1):
+        f = files[(n - 1) % len(files)]
+        for sub, h, br in ((False, 540, "1200k"), (True, 216, "220k")):
+            out = folder / f"footage{n:02d}{'_sub' if sub else ''}_{codec}.mkv"
+            clips[(n, sub)] = out
+            if out.exists():
+                continue
+            label = (f",drawtext=fontfile='{font}':text='SIMULATION - sample footage':fontcolor=white@0.85:fontsize=h/26:"
+                     f"x=w-tw-h/40:y=h-th-h/40:box=1:boxcolor=black@0.5:boxborderw=6") if font else ""
+            # start each drone at a different point of the clip so two drones sharing a file don't look identical
+            cmd = [ff, "-y", "-loglevel", "error", "-ss", str((n * 7) % 20), "-i", str(f), "-t", "60", "-an",
+                   "-vf", f"scale=-2:{h},fps=25{label}", *[x.format(br=br) for x in enc], str(out)]
+            if subprocess.run(cmd).returncode != 0:   # clip shorter than the offset: start from the beginning
+                cmd[4] = "0"
+                subprocess.run(cmd, check=True)
+    return clips
+
+
 def make_clips(folder, n_drones, codec):
     ff = shutil.which("ffmpeg")
     if not ff:
@@ -392,7 +436,10 @@ def push_video(ff_clip, url):
 
 async def run_video(args, drones):
     folder = Path(args.clips)
-    clips = await asyncio.to_thread(make_clips, folder, len(drones), args.codec)
+    if args.footage:
+        clips = await asyncio.to_thread(footage_clips, args.footage, folder, len(drones), args.codec)
+    else:
+        clips = await asyncio.to_thread(make_clips, folder, len(drones), args.codec)
     procs = {}
     t0 = time.time()
     while True:
@@ -431,6 +478,7 @@ def main():
     ap.add_argument("--video", help="MediaMTX publish base, e.g. rtsp://relay:PASS@localhost:8554")
     ap.add_argument("--codec", default="h264", choices=["h264", "vp8"])
     ap.add_argument("--clips", default=str(Path(__file__).resolve().parent.parent / "data" / "sim_clips"))
+    ap.add_argument("--footage", help="folder of sample camera recordings (mp4/mov/mkv) to loop instead of test patterns")
     ap.add_argument("--no-faults", action="store_true", help="all drones fly normal missions")
     try:
         asyncio.run(main_async(ap.parse_args()))

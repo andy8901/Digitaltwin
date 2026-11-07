@@ -21,7 +21,7 @@ function WallCell({ d, big = false, onPick }: { d: Drone; big?: boolean; onPick:
   return (
     <div className={`wall-cell tone-${tone(d)} ${unavailable ? 'unavail' : ''} ${big ? 'big' : ''}`} onClick={onPick} role="button" tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onPick()} aria-label={`${d.drone_id} video`}>
-      <Video path={path} enabled={live && d.video.ready} offMessage={offMessage(d)} onStats={setVs} className="wall-video">
+      <Video path={path} enabled={live && d.video.ready} offMessage={offMessage(d)} onStats={setVs} className="wall-video" simulated={d.simulated && live}>
         <div className="vo vo-tl"><b>{d.drone_id}</b> <span className="muted">{d.gcs_id}</span></div>
         <div className="vo vo-tr"><ToneChip d={d} /></div>
         <div className="vo vo-bl">

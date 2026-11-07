@@ -101,7 +101,7 @@ async def run(args):
         dest = (host, int(port))
     else:
         import websockets
-        url = f"{args.server.rstrip('/')}/ws/ingest?token={args.token}&msn={args.msn}&model={args.model or ''}"
+        url = f"{args.server.rstrip('/')}/ws/ingest?token={args.token}&msn={args.msn}&model={args.model or ''}&mode=simulation"
         ws = await websockets.connect(url, max_size=None)
 
     video = None

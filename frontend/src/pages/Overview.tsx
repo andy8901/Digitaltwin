@@ -1,47 +1,105 @@
-import { go } from '../App';
-import { Battery, Icon, SignalBars, ToneChip } from '../components/Bits';
+// Main dashboard: everything an operator needs to read the fleet in a few seconds —
+// all 15 live camera feeds with their flight status, the fleet's live flight paths, and the alerts that need attention.
+import { useState } from 'react';
+import { ackAlert, can, go, useMe } from '../App';
+import { Battery, Icon, SevChip, SignalBars } from '../components/Bits';
+import { FlightMap2D, fitAll } from '../components/FlightMap2D';
+import { FlightView3D } from '../components/FlightView3D';
+import { freshness } from '../components/Telem';
 import { Video } from '../components/Video';
-import { ago, CONN_LABEL, dur, flightStatus, fmt, gpsLabel, signal, tone } from '../lib/format';
+import { ago, flightStatus, fmt, signal, timeOf, tone, TONE_LABEL } from '../lib/format';
 import { useLive } from '../lib/live';
+import { droneColor, usePaths } from '../lib/paths';
 import type { Drone } from '../lib/types';
+
+const na = (v: string | null) => (v == null ? <i className="na">N/A</i> : v);
 
 export function DroneTile({ d }: { d: Drone }) {
   const t = tone(d);
   const live = d.conn !== 'offline' && d.enabled;
   const warn = d.alerts.critical + d.alerts.warning;
-  const offMsg = !d.enabled ? 'Slot disabled' : d.conn === 'offline' ? (d.last_seen_s == null ? 'GCS never connected' : `Offline · last seen ${ago(d.last_seen_s)}`)
-    : !d.video.configured ? 'No video source configured' : 'No video stream';
+  const offMsg = !d.enabled ? 'Slot disabled' : d.conn === 'offline' ? (d.last_seen_s == null ? 'GCS never connected' : `Drone offline · last seen ${ago(d.last_seen_s)}`)
+    : !d.video.configured ? 'No video source configured' : 'No stream from the camera';
+  const pos = freshness(d, 'pos');
+  const stale = live && (d.conn === 'stale' || d.conn === 'link_lost' || pos === 'stale');
   return (
-    <button className={`tile tone-${t}`} onClick={() => go(`drone/${d.key}`)} aria-label={`${d.drone_id}: ${flightStatus(d)}`}>
+    <button className={`tile tone-${t}`} onClick={() => go(`drone/${d.key}`)} aria-label={`${d.drone_id}: ${flightStatus(d)}. Open detail`}>
       <div className="tile-h">
+        <i className="id-dot" style={{ background: droneColor(d) }} />
         <b className="tile-id">{d.drone_id}</b>
-        <span className="tile-gcs">{d.gcs_id}</span>
-        {warn > 0 && <span className={`tile-warn ${d.alerts.critical ? 'crit' : ''}`} title={`${d.alerts.critical} critical, ${d.alerts.warning} warnings`}><Icon name="warn" size={14} />{warn}</span>}
-        <ToneChip d={d} />
+        <span className="spacer" />
+        {warn > 0 && <span className={`tile-warn ${d.alerts.critical ? 'crit' : ''}`} title={`${d.alerts.critical} critical, ${d.alerts.warning} warnings`}><Icon name="warn" size={13} />{warn}</span>}
+        <span className={`chip tone-${t}`}>{TONE_LABEL[t]}</span>
       </div>
-      <Video path={d.video.sub_path || d.video.path} enabled={live && d.video.ready} offMessage={offMsg} className="tile-video">
+      <Video path={d.video.sub_path || d.video.path} enabled={live && d.video.ready} offMessage={offMsg} className="tile-video" simulated={d.simulated && live}>
         <div className="vo vo-bl">{flightStatus(d)}{d.mode ? ` · ${d.mode}` : ''}</div>
-        {d.video.recording && d.video.ready && <div className="vo vo-tr rec">REC</div>}
       </Video>
-      <div className="tile-m">
-        <div><span>Battery</span><b className="num"><Battery pct={d.batt_pct} /> {fmt(d.batt_pct)}%</b></div>
-        <div><span>Altitude</span><b className="num">{fmt(d.alt, 0)} m</b></div>
-        <div><span>Speed</span><b className="num">{fmt(d.gs, 1)} m/s</b></div>
-        <div><span>Flight</span><b className="num">{d.flight_s != null && d.armed ? dur(d.flight_s) : '—'}</b></div>
-        <div><span>GPS</span><b className="num">{gpsLabel(d)}</b></div>
-        <div><span>Signal</span><b><SignalBars v={live ? signal(d) : null} /></b></div>
-        <div><span>Mode</span><b>{d.mode || '—'}</b></div>
-        <div><span>Link</span><b className={`conn conn-${d.conn}`}>{d.conn === 'flying' || d.conn === 'online' ? 'Live' : CONN_LABEL[d.conn]}</b></div>
+      <div className={`tile-strip ${stale ? 'stale' : ''}`}>
+        <span title="Battery"><Battery pct={d.batt_pct} /> {d.batt_pct != null ? `${d.batt_pct}%` : na(null)}</span>
+        <span title="Altitude above home">{d.alt != null && pos !== 'none' ? `${fmt(d.alt, 0)} m` : na(null)}</span>
+        <span title="Ground speed">{d.gs != null ? `${fmt(d.gs, 1)} m/s` : na(null)}</span>
+        <span title="Signal"><SignalBars v={live ? signal(d) : null} /></span>
       </div>
+      {stale && <div className="tile-stale">NO DATA {d.last_seen_s != null ? `${Math.round(d.last_seen_s)} s` : ''}</div>}
     </button>
+  );
+}
+
+function AlertList() {
+  const alerts = useLive((s) => s.alerts);
+  const me = useMe();
+  const sorted = [...alerts].sort((a, b) => (a.severity === b.severity ? b.ts - a.ts : a.severity === 'critical' ? -1 : 1));
+  return (
+    <div className="dash-alerts">
+      {sorted.length ? sorted.slice(0, 40).map((a) => (
+        <div key={a.id} className={`da sev-${a.severity} ${!a.ack_ts && a.severity === 'critical' ? 'unacked' : ''}`} onClick={() => go(`drone/${a.drone_key}`)} role="button" tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && go(`drone/${a.drone_key}`)}>
+          <SevChip s={a.severity} />
+          <b>{a.drone_id}</b>
+          <span className="da-l">{a.label}</span>
+          <span className="num muted">{timeOf(a.ts)}</span>
+          <span className="da-m">{a.message}</span>
+          {!a.ack_ts && a.severity === 'critical' && can(me, 'operator') && <button className="btn sm" onClick={(e) => { e.stopPropagation(); ackAlert(a); }}>Ack</button>}
+        </div>
+      )) : <p className="ok-line">No active alerts. All drones within limits.</p>}
+    </div>
   );
 }
 
 export function Overview() {
   const drones = useLive((s) => s.drones);
+  const paths = usePaths();
+  const [view, setView] = useState<'2d' | '3d'>('2d');
+  const [fitK, setFitK] = useState(0);
+  const counts = { c: useLive((s) => s.alerts.filter((a) => a.severity === 'critical').length), w: useLive((s) => s.alerts.filter((a) => a.severity === 'warning').length) };
   return (
-    <div className="grid15">
-      {drones.map((d) => <DroneTile key={d.key} d={d} />)}
+    <div className="dash">
+      <div className="dash-left">
+        <div className="grid15">
+          {drones.map((d) => <DroneTile key={d.key} d={d} />)}
+        </div>
+        <section className="panel dash-al">
+          <div className="panel-h"><h2>Alerts</h2><span className="chip sev-critical">{counts.c} critical</span><span className="chip sev-warning">{counts.w} warning</span><span className="spacer" /><a className="btn sm ghost" href="#/alerts">All alerts</a></div>
+          <AlertList />
+        </section>
+      </div>
+      <div className="dash-side">
+        <section className="panel dash-map">
+          <div className="panel-h">
+            <h2>Fleet flight paths</h2>
+            <div className="seg"><button className={view === '2d' ? 'on' : ''} onClick={() => setView('2d')}>2D</button><button className={view === '3d' ? 'on' : ''} onClick={() => setView('3d')}>3D</button></div>
+            <span className="spacer" />
+            {view === '2d' && <button className="btn sm ghost" onClick={() => setFitK(fitAll())}>Fit</button>}
+            <button className="btn sm ghost" onClick={() => go('map')} title="Open the full-screen fleet map"><Icon name="expand" size={14} /></button>
+          </div>
+          <div className="dash-path">
+            {view === '2d'
+              ? <FlightMap2D drones={drones} paths={paths} onSelect={(k) => go(`drone/${k}`)} className="dash-leaflet" fitKey={`fleet:${fitK}`} />
+              : <FlightView3D drones={drones} focusKey={null} />}
+          </div>
+          <div className="id-legend">{drones.filter((d) => d.lat != null && d.conn !== 'offline').map((d) => <button key={d.key} onClick={() => go(`drone/${d.key}`)}><i style={{ background: droneColor(d) }} />{d.drone_id.replace('TAVAS ', '')}</button>)}</div>
+        </section>
+      </div>
     </div>
   );
 }

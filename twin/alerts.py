@@ -98,7 +98,7 @@ class AlertEngine:
         self.store.set_setting("alert_thresholds", {k: self.thresholds[k] for k in DEFAULT_THRESHOLDS})
 
     # ---------------------------------------------------------------- creating / closing
-    def _emit(self, a, kind):
+    def _emit(self, kind, a):
         for cb in self.listeners:
             try:
                 cb(kind, a)
@@ -199,6 +199,8 @@ class AlertEngine:
         self.recent_text[k] = now
         if re.match(r"^(pre-?arm|arm):", text, re.I):
             return  # pre-arm checks are shown on the drone screen, not raised as alerts
+        if re.search(r"clear|resolved|recovered", text, re.I) and sev > 2:
+            return  # e.g. "GPS Glitch cleared": the condition ended, it is not a new fault (still listed with the FC messages)
         kind = next((kd for kd, rx in PATTERNS if rx.search(text)), None)
         if kind in FAILSAFE_KINDS or FS_TEXT.search(text):
             self.raise_alert(d, "critical", "failsafe", text, "flight controller", oneshot=True)

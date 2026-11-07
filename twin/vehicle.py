@@ -228,6 +228,11 @@ class Drone:
         self.seq_recv = 0
         self.last_flight_id = None
         self.statustext_chunks = {}
+        self.seen = {}           # data group -> wall time it was last received (for stale / N/A display)
+        self.simulated = False   # True when the GCS link is the simulator (shown as SIMULATION everywhere)
+        self.mission_items = []  # planned route heard on the GCS link (MISSION_ITEM_INT), never invented
+        self.mission_pending = {}
+        self.mission_ver = 0
 
     # ----- helpers
     def status(self, now=None):
@@ -306,6 +311,9 @@ class Drone:
             self.seq_recv += 1
         self.raw(msg, now)
         name = msg.get_type()
+        grp = DATA_GROUPS.get(name)
+        if grp:
+            self.seen[grp] = now
         fn = getattr(self, "on_" + name, None)
         if fn:
             fn(msg, now)
@@ -372,7 +380,10 @@ class Drone:
         alt = m.relative_alt / 1000.0
         self.t.update(lat=lat, lon=lon, alt=alt, alt_msl=m.alt / 1000.0,
                       heading=(m.hdg / 100.0) if m.hdg != 65535 else self.t.get("yaw"),
-                      vz=-m.vz / 100.0)
+                      heading_src="gps" if m.hdg != 65535 else ("yaw" if self.t.get("yaw") is not None else None),
+                      vz=-m.vz / 100.0,
+                      # direction of movement (course over ground) from the velocity the autopilot reports
+                      track=(math.degrees(math.atan2(m.vy, m.vx)) % 360) if math.hypot(m.vx, m.vy) >= 50 else None)
         if self.armed and not self.airborne and alt > 2.0:
             self.airborne = True
             self.takeoff_pos = (lat, lon)
@@ -567,6 +578,51 @@ class Drone:
         if prev is not None and m.seq != prev:
             self.notify("mission_progress", prev, m.seq)
 
+    # The planned route is captured passively when the GCS downloads or uploads the mission over this link.
+    NAV_CMDS = {16: "waypoint", 17: "loiter", 18: "loiter", 19: "loiter", 21: "land", 22: "take-off", 82: "spline waypoint", 20: "return"}
+
+    def on_MISSION_COUNT(self, m, now):
+        if getattr(m, "mission_type", 0) != 0:
+            return
+        self.mission_pending = {"count": m.count, "items": {}, "ts": now}
+
+    def on_MISSION_ITEM_INT(self, m, now):
+        if getattr(m, "mission_type", 0) != 0:
+            return
+        p = self.mission_pending
+        if not p or now - p["ts"] > 60:
+            return
+        p["items"][m.seq] = {"seq": m.seq, "cmd": m.command, "frame": m.frame, "lat": m.x / 1e7, "lon": m.y / 1e7, "alt": m.z}
+        if len(p["items"]) >= p["count"]:
+            self._mission_done(now)
+
+    def on_MISSION_ACK(self, m, now):
+        p = self.mission_pending
+        if p and len(p["items"]) >= p["count"]:
+            self._mission_done(now)
+
+    def _mission_done(self, now):
+        p, self.mission_pending = self.mission_pending, {}
+        items = []
+        for seq in sorted(p["items"]):
+            it = p["items"][seq]
+            if seq == 0:
+                continue  # ArduPilot keeps the home position in item 0
+            name = self.NAV_CMDS.get(it["cmd"])
+            if not name:
+                continue
+            if it["cmd"] == 20 and self.home:
+                it.update(lat=self.home[0], lon=self.home[1])
+            elif it["lat"] == 0 and it["lon"] == 0:
+                continue  # e.g. a take-off item without a position
+            # MAV_FRAME_GLOBAL (0) is AMSL; the relative frames (3, 6) are above home
+            it.update(kind=name, alt_ref="amsl" if it["frame"] in (0, 5) else "home")
+            items.append(it)
+        self.mission_items = items
+        self.mission_ver += 1
+        self.mission["total"] = p["count"]
+        self.add_msg(6, f"Mission received from the GCS link: {len(items)} navigation points", now)
+
     def on_MISSION_ITEM_REACHED(self, m, now):
         self.mission["reached"] = m.seq
         self.notify("mission_reached", m.seq)
@@ -688,6 +744,13 @@ class Drone:
             "link_pct": self.link_pct(), "rssi": self.rssi_pct(),
             "home": self.home, "takeoff": self.takeoff_pos, "range": _r(self.dist_home(), 0),
             "flight_s": self.flight_time(), "flight_id": self.flight.id if self.flight else self.last_flight_id,
+            "dist_m": _r(self.flight.distance, 0) if self.flight else None,
+            "roll": _r(t.get("roll"), 1), "pitch": _r(t.get("pitch"), 1), "yaw": _r(t.get("yaw"), 1),
+            "heading_src": t.get("heading_src"), "vz": _r(t.get("vz"), 1), "track": _r(t.get("track"), 0),
+            "ages": {k: round(now - v, 1) for k, v in self.seen.items()},
+            "last_rx": round(self.last_rx, 1) if self.last_rx else None,
+            "simulated": self.simulated, "mission_ver": self.mission_ver,
+            "mission_seq": self.mission.get("seq"),
         }
 
     def detail(self, now):
@@ -711,6 +774,7 @@ class Drone:
             "prearm": self.prearm_seen[-10:],
             "msgs": list(self.msgs)[-40:],
             "geofence": (self.slot or {}).get("geofence"), "battery_cells": (self.slot or {}).get("battery_cells"),
+            "mission_items": self.mission_items,
         })
         return out
 
@@ -729,6 +793,12 @@ class Drone:
             if present & bit and enabled & bit:
                 out.append({"name": name, "ok": bool(health & bit)})
         return out
+
+
+DATA_GROUPS = {
+    "GLOBAL_POSITION_INT": "pos", "ATTITUDE": "att", "GPS_RAW_INT": "gps", "SYS_STATUS": "batt", "BATTERY_STATUS": "batt",
+    "VFR_HUD": "hud", "RADIO_STATUS": "radio", "RC_CHANNELS": "rc", "HEARTBEAT": "hb",
+}
 
 
 def safe_name(s):
@@ -806,7 +876,7 @@ class Hub:
                 self.store.upsert_drone(key, d.msn, d.model, sysid)
         return d
 
-    def feed(self, source, data, msn=None, model=None, slot=None):
+    def feed(self, source, data, msn=None, model=None, slot=None, simulated=False):
         """Parse a chunk of MAVLink from one source. With `slot`, the source is that drone's own GCS: every
         autopilot message on it belongs to that drone (other vehicles heard on the same link are ignored)."""
         now = time.time()
@@ -838,6 +908,7 @@ class Hub:
                 d = self.resolve(msn, model, sysid, msg)
             if d is None:
                 continue
+            d.simulated = simulated
             d.handle(msg, now)
             n += 1
         return n

@@ -1,5 +1,6 @@
 // Live connection to the server: the whole fleet 4x/s, the viewed drone's full twin, and alerts as they happen.
 import { useEffect, useSyncExternalStore } from 'react';
+import { initPaths, updatePaths } from './paths';
 import type { Alert, Drone, DroneDetail, GcsInfo, Summary } from './types';
 
 interface State {
@@ -50,6 +51,7 @@ function record(drones: Drone[], t: number) {
 
 export function connectLive() {
   if (ws) return;
+  initPaths();
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live`);
   ws.onopen = () => { delay = 1000; set({ connected: true }); if (wantSub) ws?.send(JSON.stringify({ sub: wantSub })); };
   ws.onmessage = (e) => {
@@ -58,6 +60,7 @@ export function connectLive() {
       const byKey: Record<string, Drone> = {};
       for (const d of j.drones as Drone[]) byKey[d.key] = d;
       set({ t: j.t, drones: j.drones, byKey, summary: j.summary, gcs: j.gcs, videoApi: j.video_api, history: record(j.drones, j.t) });
+      updatePaths(j.drones, j.t);
     } else if (j.type === 'detail') {
       if (j.drone.key === wantSub) {
         const prev = state.detail && state.detail.key === j.drone.key ? state.detail : null;

@@ -68,6 +68,20 @@ function SummaryBar() {
   );
 }
 
+/** Shown whenever any drone's data comes from the simulator, so simulated data is never mistaken for real flights. */
+function SimBanner() {
+  const sim = useLive((x) => x.drones.filter((d) => d.simulated && d.conn !== 'offline').map((d) => d.drone_id).join(', '));
+  if (!sim) return null;
+  const n = sim.split(', ').length;
+  return (
+    <div className="sim-banner" role="status">
+      <b>SIMULATION</b>
+      <span>{n} drone{n > 1 ? 's are' : ' is'} fed by the simulator: their telemetry, flight paths and video are test data, not real flights.</span>
+      <span className="muted small">{n <= 4 ? sim : ''}</span>
+    </div>
+  );
+}
+
 function CriticalBanner() {
   const alerts = useLive((x) => x.alerts);
   const me = useMe();
@@ -156,6 +170,7 @@ export function App() {
             <SummaryBar />
             <Clock />
           </header>
+          <SimBanner />
           <CriticalBanner />
           <main className={`page page-${page || 'overview'}`}>{body}</main>
         </div>

@@ -17,7 +17,7 @@ const BLUE = 0x2448c9;
 const BLACK = 0x15181c;
 const CARBON = 0x1d2126;
 
-function buildTavas() {
+export function buildTavas() {
   const g = new THREE.Group();
   const mat = (color: number, o: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
     new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.15, ...o });

@@ -13,9 +13,10 @@ interface Props {
   onStats?: (s: VideoStats) => void;
   children?: React.ReactNode;   // overlays
   pauseWhenHidden?: boolean;
+  simulated?: boolean;          // feed comes from the simulator: always labelled, never shown as a real camera
 }
 
-export function Video({ path, enabled = true, offMessage = 'No video', className = '', onStats, children, pauseWhenHidden = true }: Props) {
+export function Video({ path, enabled = true, offMessage = 'No video', className = '', onStats, children, pauseWhenHidden = true, simulated = false }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
   const [visible, setVisible] = useState(true);
@@ -128,7 +129,13 @@ export function Video({ path, enabled = true, offMessage = 'No video', className
   return (
     <div ref={box} className={`video ${className} v-${st.state}`}>
       <video ref={vid} autoPlay muted playsInline />
-      {st.state !== 'playing' && <div className="video-msg"><span>{st.message}</span></div>}
+      {st.state !== 'playing' && (
+        <div className="video-msg">
+          {st.state === 'connecting' || st.message.startsWith('Paused') ? <span>{st.message}</span>
+            : <span><b className="vid-off">VIDEO OFFLINE</b><em>{st.message}</em></span>}
+        </div>
+      )}
+      {simulated && <div className="sim-badge" title="Simulator feed: test or sample footage, not a live drone camera">SIMULATION</div>}
       {children}
     </div>
   );
