@@ -74,9 +74,9 @@ export function connectLive() {
       const open = a.severity !== 'info' && (a.resolved_ts == null || (a.severity === 'critical' && a.ack_ts == null));
       if (open) alerts = [a, ...alerts];
       const patch: Partial<State> = { alerts };
-      if (j.kind === 'new') {
+      if (j.kind === 'new' && a.severity !== 'info') {   // routine events (take-off, mission started…) stay in the alert list only
         const toast = { ...a, toastId: ++toastSeq };
-        patch.toasts = [toast, ...state.toasts].slice(0, 5);
+        patch.toasts = [toast, ...state.toasts].slice(0, 3);
         setTimeout(() => set({ toasts: state.toasts.filter((x) => x.toastId !== toast.toastId) }), a.severity === 'critical' ? 12000 : 7000);
       }
       set(patch);

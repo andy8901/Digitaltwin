@@ -220,7 +220,8 @@ export function DroneTwin({ droneKey }: { droneKey?: string }) {
         <span className="bar-stat"><span className="muted">Flight</span> <b className="num">{d.flight ? dur(d.flight.time_s) : '—'}</b></span>
         <span className="spacer" />
         <span className={`bar-stat last-rx ${d.conn === 'stale' || d.conn === 'link_lost' ? 'bad' : ''}`}><span className="muted">Last data</span> <b className="num">{d.last_rx ? timeOf(d.last_rx) : 'never'}</b></span>
-        <button className="btn ghost" onClick={() => go(`history/${d.key}`)}><Icon name="history" /> History</button>
+        <button className="btn" onClick={() => go(`monitor/${d.key}`)}><Icon name="monitor" /> Live flight monitor</button>
+        <button className="btn ghost" onClick={() => go(`history/${d.key}`)}><Icon name="history" /> Flight logs</button>
       </div>
       <div className="dt-grid">
         {/* A: live camera */}

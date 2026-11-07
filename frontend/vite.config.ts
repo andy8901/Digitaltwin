@@ -5,7 +5,10 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   base: '/static/cc/',
-  build: { outDir: '../twin/static/cc', emptyOutDir: true, chunkSizeWarningLimit: 1500 },
+  build: {
+    outDir: '../twin/static/cc', emptyOutDir: true, chunkSizeWarningLimit: 1500,
+    rollupOptions: { output: { manualChunks: { maplibre: ['maplibre-gl'], three: ['three'], leaflet: ['leaflet', 'hls.js'] } } },
+  },
   server: {
     proxy: {
       '/api': 'http://127.0.0.1:8080', '/ws': { target: 'ws://127.0.0.1:8080', ws: true },

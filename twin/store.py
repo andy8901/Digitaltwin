@@ -69,6 +69,19 @@ class Store:
         self.lock = threading.Lock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            # columns added in v2.2 (flight-log analysis, uploads, organisation metadata)
+            for table, col, typ in (("flights", "source", "TEXT DEFAULT 'live'"), ("flights", "file_hash", "TEXT"),
+                                    ("flights", "log_name", "TEXT"), ("flights", "report", "TEXT"),
+                                    ("flights", "analysis_status", "TEXT"), ("flights", "analysis_error", "TEXT"),
+                                    ("flights", "received_ts", "REAL"), ("flights", "uploaded_by", "TEXT"),
+                                    ("flights", "reviewed_by", "TEXT"), ("flights", "reviewed_ts", "REAL"),
+                                    ("fleet", "department", "TEXT"), ("fleet", "customer", "TEXT"), ("fleet", "location", "TEXT")):
+                cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+                if col not in cols:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            self.db.execute("CREATE INDEX IF NOT EXISTS ix_flights_hash ON flights(file_hash)")
+            # an analysis that was running when the server stopped starts again
+            self.db.execute("UPDATE flights SET analysis_status='pending' WHERE analysis_status='running'")
             # Flights left open by a previous run can't be finished any more.
             self.db.execute("UPDATE flights SET status='interrupted', end_ts=COALESCE(end_ts, start_ts) WHERE status='flying'")
 
@@ -107,10 +120,45 @@ class Store:
     def add_message(self, drone_key, fid, ts, sev, text):
         self._x("INSERT INTO messages(drone_key, flight_id, ts, sev, text) VALUES(?,?,?,?,?)", (drone_key, fid, ts, sev, text))
 
-    def set_conclusion(self, fid, conclusion, note):
+    def set_conclusion(self, fid, conclusion, note, user=None):
         if conclusion not in CONCLUSIONS:
             conclusion = None
-        self._x("UPDATE flights SET conclusion=?, note=? WHERE id=?", (conclusion, note, fid))
+        self._x("UPDATE flights SET conclusion=?, note=?, reviewed_by=?, reviewed_ts=? WHERE id=?",
+                (conclusion, note, user if conclusion else None, time.time() if conclusion else None, fid))
+
+    # flight-log analysis
+    def add_upload(self, drone_key, msn, model, name, file_hash, path, user):
+        now = time.time()
+        cur = self._x("""INSERT INTO flights(drone_key, msn, model, start_ts, end_ts, status, summary, tlog_path, source, file_hash,
+                         log_name, analysis_status, received_ts, uploaded_by) VALUES(?,?,?,?,?, 'uploaded', '{}', ?, 'upload', ?, ?, 'pending', ?, ?)""",
+                      (drone_key, msn, model, now, now, str(path), file_hash, name, now, user))
+        return cur.lastrowid
+
+    def by_hash(self, file_hash):
+        r = self._x("SELECT id FROM flights WHERE file_hash=? ORDER BY id LIMIT 1", (file_hash,)).fetchone()
+        return r[0] if r else None
+
+    def set_analysis(self, fid, status, report=None, error=None):
+        self._x("UPDATE flights SET analysis_status=?, report=COALESCE(?, report), analysis_error=? WHERE id=?",
+                (status, json.dumps(report) if report is not None else None, error, fid))
+
+    def report(self, fid):
+        r = self._x("SELECT report FROM flights WHERE id=?", (fid,)).fetchone()
+        return json.loads(r[0]) if r and r[0] else None
+
+    def to_analyse(self):
+        """Finished flights whose log hasn't been analysed yet."""
+        return [r[0] for r in self._x("""SELECT id FROM flights WHERE status!='flying'
+            AND (analysis_status IS NULL OR analysis_status='pending') ORDER BY id""")]
+
+    def set_upload_result(self, fid, start_ts, end_ts, summary, points, messages):
+        with self.lock:
+            self.db.execute("UPDATE flights SET start_ts=?, end_ts=?, summary=? WHERE id=?", (start_ts, end_ts, json.dumps(summary), fid))
+            self.db.execute("DELETE FROM points WHERE flight_id=?", (fid,))
+            self.db.executemany("INSERT INTO points(flight_id, t, lat, lon, alt) VALUES(?,?,?,?,?)", [(fid, *p) for p in points])
+            self.db.execute("DELETE FROM messages WHERE flight_id=?", (fid,))
+            self.db.executemany("INSERT INTO messages(drone_key, flight_id, ts, sev, text) VALUES((SELECT drone_key FROM flights WHERE id=?),?,?,?,?)",
+                                [(fid, fid, m["ts"], m["sev"], m["text"]) for m in messages])
 
     def flights(self, msn=None, since=None, limit=None, include_open=True, drone_key=None, until=None):
         q, a = "SELECT * FROM flights WHERE 1=1", []
@@ -185,14 +233,17 @@ class Store:
         return out
 
     def save_slot(self, slot):
-        self._x("""INSERT INTO fleet(slot, key, drone_id, gcs_id, msn, model, telemetry, video, geofence, battery_cells, enabled, notes)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        self._x("""INSERT INTO fleet(slot, key, drone_id, gcs_id, msn, model, telemetry, video, geofence, battery_cells, enabled, notes,
+                   department, customer, location)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(slot) DO UPDATE SET key=excluded.key, drone_id=excluded.drone_id, gcs_id=excluded.gcs_id,
                    msn=excluded.msn, model=excluded.model, telemetry=excluded.telemetry, video=excluded.video,
-                   geofence=excluded.geofence, battery_cells=excluded.battery_cells, enabled=excluded.enabled, notes=excluded.notes""",
+                   geofence=excluded.geofence, battery_cells=excluded.battery_cells, enabled=excluded.enabled, notes=excluded.notes,
+                   department=excluded.department, customer=excluded.customer, location=excluded.location""",
                 (slot["slot"], slot["key"], slot["drone_id"], slot["gcs_id"], slot.get("msn"), slot.get("model"),
                  json.dumps(slot.get("telemetry") or {}), json.dumps(slot.get("video") or {}), json.dumps(slot.get("geofence") or {}),
-                 slot.get("battery_cells"), 1 if slot.get("enabled", True) else 0, slot.get("notes") or ""))
+                 slot.get("battery_cells"), 1 if slot.get("enabled", True) else 0, slot.get("notes") or "",
+                 slot.get("department") or "", slot.get("customer") or "", slot.get("location") or ""))
 
     # ---------------------------------------------------------------- GCS link events
     def gcs_event(self, gcs_id, drone_key, kind, detail=""):

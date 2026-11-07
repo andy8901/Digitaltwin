@@ -111,7 +111,7 @@ EVENT_NAMES = {"crash": "Crash", "thrust_loss": "Potential thrust loss", "motor_
                "vibration_issue": "High vibration"}
 
 
-def flight_pdf(flight, track, alerts, messages):
+def flight_pdf(flight, track, alerts, messages, report=None):
     s = flight["summary"]
     st = _styles()
     buf = io.BytesIO()
@@ -139,11 +139,35 @@ def flight_pdf(flight, track, alerts, messages):
         ["Max range from home", _f(s.get("range_m"), 0, " m"), "Mission", mstatus],
         ["Satellites (min)", _f(s.get("min_sats")), "HDOP (max)", _f(s.get("max_hdop"), 2)],
     ]
+    if report:
+        r = report
+        lvl = {"critical": "#c62f2f", "warning": "#b8860b", "normal": "#2e8b57"}.get(r["level"], "#333")
+        story.append(Paragraph(f'<font color="{lvl}"><b>{r["level"].upper()}</b></font> · {r["headline"]}', st["h2"]))
+        story.append(Paragraph(f"Flight termination: {r['termination_text']}", st["p"]))
+        rows += [
+            ["Voltage at take-off", _f(r.get("volt_takeoff"), 2, " V"), "Voltage at end", _f(r.get("volt_landing"), 2, " V")],
+            ["Lowest voltage", _f(r.get("volt_min"), 2, " V"), "Max current", _f(r.get("max_current_a"), 1, " A")],
+            ["Log", (flight.get("log_name") or "recorded live")[:40], "Position data", f"{r.get('position_source')} {r.get('position_rate_hz') or ''} Hz"],
+        ]
+        rows[3][1] = _dur(r.get("flight_time_s"))
+        rows[3][3] = _f(r.get("distance_m"), 0, " m")
+        rows[4][1] = _f(r.get("max_alt_m"), 1, " m")
+        rows[4][3] = _f(r.get("max_speed_ms"), 1, " m/s")
+        rows[6][1] = _f(r.get("max_range_m"), 0, " m")
     t = Table(rows, colWidths=[34 * mm, 51 * mm, 34 * mm, 55 * mm])
     t.setStyle(TableStyle([("FONT", (0, 0), (-1, -1), "Helvetica", 9), ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 9),
                            ("FONT", (2, 0), (2, -1), "Helvetica-Bold", 9), ("TEXTCOLOR", (0, 0), (-1, -1), INK),
                            ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#d6dde3")), ("TOPPADDING", (0, 0), (-1, -1), 3)]))
     story.append(t)
+    if report:
+        fl = report["findings"]
+        story.append(Paragraph(f"Critical flight events found in the log ({len(fl)})", st["h2"]))
+        if fl:
+            story.append(_table([["Time", "Level", "Finding", "Detail"]] + [
+                [_dur(x.get("t")), x["level"], Paragraph(x["title"], st["p"]), Paragraph(x["detail"], st["p"])] for x in fl[:80]],
+                [16 * mm, 18 * mm, 46 * mm, 94 * mm]))
+        else:
+            story.append(Paragraph("No abnormalities found in this log.", st["p"]))
     story.append(Paragraph("Flight trajectory", st["h2"]))
     story.append(_track_drawing(track, events))
     story.append(Paragraph("Green dot: take-off · dark dot: end · red/amber: events", st["small"]))

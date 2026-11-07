@@ -10,7 +10,8 @@ import type { Alert } from '../lib/types';
 
 interface FlightRow {
   id: number; drone_key: string; drone_id: string; gcs_id: string | null; start_ts: number; end_ts: number | null; status: string;
-  conclusion: string | null; has_tlog: boolean; events: string[];
+  conclusion: string | null; has_tlog: boolean; events: string[]; source?: string; log_name?: string | null; analysis_status?: string | null;
+  verdict?: { level: string; headline: string; termination: string } | null;
   summary: { flight_time_min?: number; max_alt_m?: number; max_speed_ms?: number; distance_m?: number; takeoff_ts?: number; landing_ts?: number;
     batt_start_pct?: number; batt_end_pct?: number; mah_used?: number; mission?: { completed?: boolean; flown_auto?: boolean }; crash?: boolean };
 }
@@ -102,12 +103,12 @@ export function History({ droneKey }: { droneKey?: string }) {
       </div>
       <div className="table-wrap">
         <table className="tbl">
-          <thead><tr><th>Date</th><th>Drone</th><th>Take-off</th><th>Landing</th><th>Duration</th><th>Max alt</th><th>Max speed</th><th>Battery used</th><th>Mission</th><th>Events</th><th>Root cause</th><th /></tr></thead>
+          <thead><tr><th>Date</th><th>Drone</th><th>Take-off</th><th>Landing</th><th>Duration</th><th>Max alt</th><th>Max speed</th><th>Battery used</th><th>Mission</th><th>Events</th><th>Report</th><th>Root cause</th><th /></tr></thead>
           <tbody>
             {rows.map((f) => {
               const s = f.summary;
               return (
-                <tr key={f.id} onClick={() => setOpen(f.id)}>
+                <tr key={f.id} onClick={() => go(`flight/${f.id}`)}>
                   <td className="num">{dateOf(f.start_ts)}</td>
                   <td><b>{f.drone_id}</b> <span className="muted">{f.gcs_id}</span></td>
                   <td className="num">{s.takeoff_ts ? timeOf(s.takeoff_ts) : timeOf(f.start_ts)}</td>
@@ -118,18 +119,21 @@ export function History({ droneKey }: { droneKey?: string }) {
                   <td className="num">{s.batt_start_pct != null && s.batt_end_pct != null ? `${s.batt_start_pct - s.batt_end_pct}%` : '—'}</td>
                   <td>{s.mission?.completed ? 'Completed' : s.mission?.flown_auto ? 'Not completed' : 'Manual'}</td>
                   <td>{[...new Set(f.events)].map((e) => <span key={e} className={`tag ${RED.has(e) ? 'tag-red' : ''}`}>{EV[e] || e}</span>)}{f.status !== 'completed' && f.status !== 'flying' && <span className="tag">{f.status.replace('_', ' ')}</span>}</td>
+                  <td className="verdict-cell">{f.verdict ? <><span className={`chip ${f.verdict.level === 'critical' ? 'sev-critical' : f.verdict.level === 'warning' ? 'sev-warning' : 'tone-normal'}`}>{f.verdict.level}</span> <span className="small">{f.verdict.headline}</span></>
+                    : f.status === 'flying' ? '—' : f.analysis_status === 'error' ? <span className="bad small">analysis failed</span> : <span className="muted small">analysing…</span>}
+                    {f.source === 'upload' && <span className="tag">uploaded</span>}</td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <select defaultValue={f.conclusion || ''} disabled={!can(me, 'operator')} onChange={(e) => setRoot(f.id, e.target.value)} aria-label="Root cause">
                       <option value="">Not set</option><option value="pilot_error">Pilot error</option><option value="system_error">System error</option><option value="undetermined">Yet to decide</option>
                     </select>
                   </td>
                   <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
-                    <a className="btn sm" href={`/api/flights/${f.id}/report.pdf`}>PDF</a> <a className="btn sm ghost" href={`/api/flights/${f.id}/telemetry.csv`}>CSV</a>
+                    {f.verdict && <><a className="btn sm" href={`#/replay/${f.id}`}>Replay</a> </>}<button className="btn sm ghost" onClick={() => setOpen(f.id)}>Map</button> <a className="btn sm ghost" href={`/api/flights/${f.id}/report.pdf`}>PDF</a> <a className="btn sm ghost" href={`/api/flights/${f.id}/telemetry.csv`}>CSV</a>
                   </td>
                 </tr>
               );
             })}
-            {!rows.length && <tr><td colSpan={12} className="empty-row">No flights in this period.</td></tr>}
+            {!rows.length && <tr><td colSpan={13} className="empty-row">No flights in this period.</td></tr>}
           </tbody>
         </table>
       </div>

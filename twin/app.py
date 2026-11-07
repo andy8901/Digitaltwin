@@ -21,13 +21,14 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, config, reports, stats
+from . import auth, config, flightlog, reports, stats
 from .alerts import DEFAULT_THRESHOLDS, RULE_LABELS, THRESHOLD_HELP
 from .fleet import TELEMETRY_TYPES, VIDEO_TYPES, video_path
 from .health import drone_health
+from .routes_logs import router as logs_router
 from .routes_planner import router as planner_router
 from .routes_video import router as video_router
-from .state import alerts, fleet, hub, store, user, video
+from .state import alerts, analyser, fleet, hub, store, user, video
 from .version import __version__
 
 log = logging.getLogger("twin")
@@ -57,6 +58,7 @@ async def lifespan(app):
 app = FastAPI(title="TAVAS Digital Twin Command Centre", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 app.include_router(planner_router)
+app.include_router(logs_router)
 app.include_router(video_router)
 
 
@@ -379,13 +381,28 @@ def api_user_delete(name: str, request: Request):
 
 
 # ---------------------------------------------------------------- flights, history, reports
+def _verdict(report_json):
+    if not report_json:
+        return None
+    try:
+        r = json.loads(report_json)
+    except ValueError:
+        return None
+    return {"level": r.get("level"), "headline": r.get("headline"), "termination": r.get("termination"),
+            "critical": r.get("counts", {}).get("critical", 0), "warning": r.get("counts", {}).get("warning", 0),
+            "fc_errors": r.get("fc_errors", 0)}
+
+
 def _flight_row(f):
     s = f["summary"]
     d = hub.drones.get(f["drone_key"])
     return {"id": f["id"], "drone_key": f["drone_key"], "drone_id": s.get("drone_id") or (d.drone_id if d else f["msn"]),
             "gcs_id": s.get("gcs_id") or (d.gcs_id if d else None), "msn": f["msn"], "model": f["model"],
             "start_ts": f["start_ts"], "end_ts": f["end_ts"], "status": f["status"], "conclusion": f["conclusion"], "note": f["note"],
-            "has_tlog": bool(f["tlog_path"]),
+            "has_tlog": bool(f["tlog_path"]) and f.get("source") != "upload",
+            "source": f.get("source") or "live", "log_name": f.get("log_name"), "analysis_status": f.get("analysis_status"),
+            "received_ts": f.get("received_ts"), "reviewed_by": f.get("reviewed_by"),
+            "verdict": _verdict(f.get("report")),
             "summary": {k: v for k, v in s.items() if k not in ("events", "modes", "prearm_messages", "counts")},
             "events": [e["type"] for e in s.get("events", [])]}
 
@@ -406,6 +423,8 @@ def api_flight(fid: int, request: Request):
     row = _flight_row(f)
     f.pop("tlog_path", None)
     f.update({k: row[k] for k in ("drone_id", "gcs_id", "has_tlog", "events")})
+    f.pop("report", None)
+    f.pop("file_hash", None)
     f["track"] = store.track(fid)
     f["messages"] = store.messages(fid)
     f["alerts"] = [_alert_out(a) for a in store.alerts(f["drone_key"], since=f["start_ts"] - 1, limit=2000)
@@ -415,10 +434,10 @@ def api_flight(fid: int, request: Request):
 
 @app.post("/api/flights/{fid}/conclusion")
 def api_conclusion(fid: int, request: Request, body: dict = Body(...)):
-    user(request, "operator")
+    u = user(request, "operator")
     if not store.flight(fid):
         raise HTTPException(404)
-    store.set_conclusion(fid, body.get("conclusion"), (body.get("note") or "")[:1000])
+    store.set_conclusion(fid, body.get("conclusion"), (body.get("note") or "")[:1000], user=u["username"])
     return {"ok": True}
 
 
@@ -438,7 +457,13 @@ def api_flight_pdf(fid: int, request: Request):
     if not f:
         raise HTTPException(404)
     al = [_alert_out(a) for a in store.alerts(f["drone_key"], since=f["start_ts"] - 1, limit=2000) if a["ts"] <= (f["end_ts"] or time.time()) + 1]
-    pdf = reports.flight_pdf(f, store.track(fid), list(reversed(al)), store.messages(fid))
+    rep = json.loads(f["report"]) if f.get("report") else None
+    slot = next((x for x in fleet.slots if x["key"] == f["drone_key"]), {})
+    f["summary"].setdefault("drone_id", slot.get("drone_id"))
+    f["summary"].setdefault("gcs_id", slot.get("gcs_id"))
+    if f.get("source") == "upload":
+        al = []
+    pdf = reports.flight_pdf(f, store.track(fid), list(reversed(al)), store.messages(fid), report=rep)
     name = f"{(f['summary'].get('drone_id') or f['msn']).replace(' ', '_')}_flight{fid}.pdf"
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -449,10 +474,18 @@ def api_flight_csv(fid: int, request: Request):
     f = store.flight(fid)
     if not f:
         raise HTTPException(404)
-    rows = store.telemetry(f["drone_key"], f["start_ts"] - 1, (f["end_ts"] or time.time()) + 1, flight_id=fid)
-    for r in rows:
-        r["time"] = datetime.fromtimestamp(r["ts"], stats.TZ).isoformat(timespec="seconds")
-    cols = ["time", "lat", "lon", "alt", "alt_msl", "gs", "heading", "batt_pct", "volt", "curr", "sats", "hdop", "link", "mode"]
+    tl = flightlog.load(fid)
+    if tl:
+        # the analysed log at its full timeline rate (includes attitude and vibration)
+        c = tl["cols"]
+        cols = ["time"] + [k for k in flightlog.COLS if k != "ts"]
+        rows = [{"time": datetime.fromtimestamp(c["ts"][i], stats.TZ).isoformat(timespec="milliseconds"),
+                 **{k: c[k][i] for k in flightlog.COLS if k != "ts"}} for i in range(tl["n"])]
+    else:
+        rows = store.telemetry(f["drone_key"], f["start_ts"] - 1, (f["end_ts"] or time.time()) + 1, flight_id=fid)
+        for r in rows:
+            r["time"] = datetime.fromtimestamp(r["ts"], stats.TZ).isoformat(timespec="seconds")
+        cols = ["time", "lat", "lon", "alt", "alt_msl", "gs", "heading", "batt_pct", "volt", "curr", "sats", "hdop", "link", "mode"]
     return PlainTextResponse(reports.to_csv(rows, cols), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="flight{fid}_telemetry.csv"'})
 
@@ -642,6 +675,8 @@ async def _tick_loop():
             store.add_telemetry(hub.sample())
             if n % 5 == 0:
                 hub.tick()
+            if n % 10 == 2:
+                analyser.scan()     # finished flights and uploads waiting for their incident report
             if n % 3600 == 0:
                 store.prune_telemetry(time.time() - config.TELEMETRY_KEEP_DAYS * 86400)
         except Exception:
