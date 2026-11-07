@@ -41,6 +41,15 @@ The drone screen is split into four parts:
 - A drone fed by a field relay or a MAVLink adapter is shown as **REAL-TIME**.
 - A drone with nothing arriving is shown as **NO LIVE DATA**.
 
+## See it on your own PC (live 3D satellite view)
+
+The satellite imagery, terrain and buildings are loaded by your browser from public map servers, so run the demo on a PC with internet:
+
+- **Windows:** double-click `run_demo_windows.bat`
+- **macOS / Linux:** `./run_demo.sh`
+
+It installs what it needs the first time (Python 3.10+ required), starts the command centre and 15 **simulated** drones (labelled SIMULATION), and opens the **Live Flight Monitor** in 3D. Sign in as `admin` / `demo`. Switch drones with the selector, use Chase / Follow / Free / Whole flight, drag with the right mouse button (or Ctrl + drag) to rotate and tilt, and use *Layers* for terrain, buildings, roads and place names. The demo has no camera video, so the video tiles show VIDEO OFFLINE.
+
 ## Flight analysis (v2.2)
 
 ### Organization Overview

@@ -13,8 +13,8 @@ import type { DroneDetail } from '../lib/types';
 function load<T>(k: string, def: T): T { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : def; } catch { return def; } }
 function save(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } }
 
-export function useMapPrefs(prefix: string) {
-  const [view, setView] = useState<'2d' | '3d'>(() => load(`${prefix}.view`, '2d'));
+export function useMapPrefs(prefix: string, defView: '2d' | '3d' = '2d') {
+  const [view, setView] = useState<'2d' | '3d'>(() => load(`${prefix}.view`, defView));
   const [cam, setCam] = useState<Cam>(() => load(`${prefix}.cam`, 'follow'));
   const [layers, setLayers] = useState<Layers>(() => ({ ...DEFAULT_LAYERS, ...load(`${prefix}.layers`, {}) }));
   useEffect(() => save(`${prefix}.view`, view), [prefix, view]);
@@ -55,7 +55,7 @@ export function Monitor({ droneKey }: { droneKey?: string }) {
   const d = useDetail(key);
   const alerts = useLive((s) => s.alerts);
   const paths = usePaths();
-  const prefs = useMapPrefs('cc.mon');
+  const prefs = useMapPrefs('cc.mon', '3d');
   if (!key) return <div className="empty">No drones registered.</div>;
   if (!d) return <div className="empty">Loading {key}…</div>;
   const p = paths[d.key];

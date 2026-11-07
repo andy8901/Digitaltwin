@@ -4,3 +4,4 @@
 __pycache__/
 recordings/
 node_modules/
+/demo_data/
